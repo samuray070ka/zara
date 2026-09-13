@@ -28,6 +28,7 @@ export default function Auth() {
   const { t, lang } = useLang();
   const { login } = useAuth();
   const scrollRef = useRef<ScrollView>(null);
+  const phoneInputRef = useRef<TextInput>(null);
   const [step, setStep] = useState<1 | 2>(1);
   const [phone, setPhone] = useState("+998");
   const [code, setCode] = useState("");
@@ -109,11 +110,10 @@ export default function Auth() {
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         keyboardVerticalOffset={Platform.OS === "ios" ? insets.top + 8 : 0}
       >
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
           <ScrollView
             ref={scrollRef}
             contentContainerStyle={[st.body, { paddingBottom: 48 + Math.max(insets.bottom, 8) }]}
-            keyboardShouldPersistTaps="handled"
+            keyboardShouldPersistTaps="always"
             keyboardDismissMode="on-drag"
             showsVerticalScrollIndicator={false}
           >
@@ -125,18 +125,28 @@ export default function Auth() {
                 <>
                   <Text style={st.title}>{t("loginTitle")}</Text>
                   <Text style={st.sub}>SMS orqali tasdiqlash kodi yuboriladi. Parol kerak emas.</Text>
-                  <TextInput
-                    testID="auth-phone-input"
-                    style={st.input}
-                    value={phone}
-                    onChangeText={setPhone}
-                    keyboardType="phone-pad"
-                    placeholder="+998 90 123 45 67"
-                    placeholderTextColor={C.muted}
-                    onFocus={() => scrollToInput(80)}
-                    returnKeyType="done"
-                    blurOnSubmit
-                  />
+                  <Pressable
+                    style={{ width: "100%" }}
+                    onPress={() => phoneInputRef.current?.focus()}
+                  >
+                    <TextInput
+                      ref={phoneInputRef}
+                      testID="auth-phone-input"
+                      style={st.input}
+                      value={phone}
+                      onChangeText={setPhone}
+                      keyboardType="phone-pad"
+                      textContentType="telephoneNumber"
+                      autoComplete="tel"
+                      placeholder="+998 90 123 45 67"
+                      placeholderTextColor={C.muted}
+                      onFocus={() => scrollToInput(80)}
+                      returnKeyType="done"
+                      blurOnSubmit
+                      autoFocus
+                      showSoftInputOnFocus
+                    />
+                  </Pressable>
                   {!!err && (
                     <Text testID="auth-error-text" style={st.err}>
                       {err}
@@ -228,7 +238,6 @@ export default function Auth() {
               )}
             </View>
           </ScrollView>
-        </TouchableWithoutFeedback>
       </KeyboardAvoidingView>
     </View>
   );

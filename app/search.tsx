@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   useWindowDimensions,
   Platform,
+  Modal,
 } from "react-native";
 import { Image } from "expo-image";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -43,6 +44,7 @@ export default function Search() {
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(null);
+  const [showImageSource, setShowImageSource] = useState(false);
   const [imageSearching, setImageSearching] = useState(false);
   const [imageError, setImageError] = useState("");
   const debounce = useRef<any>(null);
@@ -136,7 +138,14 @@ export default function Search() {
     }
   };
 
+  const openImageSource = () => {
+    if (imageSearching) return;
+    setShowImageSource(true);
+  };
+
   const pickSearchImage = async () => {
+    setShowImageSource(false);
+
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
@@ -162,6 +171,8 @@ export default function Search() {
   };
 
   const takeSearchPhoto = async () => {
+    setShowImageSource(false);
+
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
       if (!perm.granted) {
@@ -188,7 +199,7 @@ export default function Search() {
   useEffect(() => {
     if (params.imageMode === "1" && !autoImageStarted.current) {
       autoImageStarted.current = true;
-      pickSearchImage();
+      setShowImageSource(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.imageMode]);
@@ -240,7 +251,7 @@ export default function Search() {
         <Pressable
           testID="search-image-button"
           style={st.imageBtn}
-          onPress={pickSearchImage}
+          onPress={openImageSource}
           disabled={imageSearching}
         >
           <Ionicons
@@ -249,16 +260,6 @@ export default function Search() {
             color={C.brandDark}
           />
         </Pressable>
-        {Platform.OS !== "web" && (
-          <Pressable
-            testID="search-camera-button"
-            style={st.imageBtn}
-            onPress={takeSearchPhoto}
-            disabled={imageSearching}
-          >
-            <Ionicons name="camera" size={20} color={C.brandDark} />
-          </Pressable>
-        )}
       </View>
 
       {!!imageUri && (
@@ -388,7 +389,7 @@ export default function Search() {
           <Pressable
             testID="search-image-cta"
             style={st.imageCta}
-            onPress={pickSearchImage}
+            onPress={openImageSource}
           >
             <View style={st.imageCtaIcon}>
               <Ionicons name="images-outline" size={28} color={C.brandDark} />
@@ -450,11 +451,111 @@ export default function Search() {
           )}
         </ScrollView>
       )}
+
+      <Modal
+        visible={showImageSource}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowImageSource(false)}
+      >
+        <View style={st.sourceBackdrop}>
+          <Pressable style={StyleSheet.absoluteFillObject} onPress={() => setShowImageSource(false)} />
+          <View style={st.sourceSheet}>
+            <View style={st.sourceHandle} />
+            <Text style={st.sourceTitle}>Rasm orqali qidirish</Text>
+            <Text style={st.sourceSub}>Galereyadan tanlang yoki kamera bilan oling</Text>
+            <Pressable
+              testID="search-source-gallery"
+              style={st.sourceBtn}
+              onPress={pickSearchImage}
+            >
+              <Ionicons name="images-outline" size={22} color={C.brandDark} />
+              <Text style={st.sourceBtnTxt}>Galereyadan tanlash</Text>
+            </Pressable>
+            <Pressable
+              testID="search-source-camera"
+              style={st.sourceBtn}
+              onPress={takeSearchPhoto}
+            >
+              <Ionicons name="camera-outline" size={22} color={C.brandDark} />
+              <Text style={st.sourceBtnTxt}>Kamera bilan olish</Text>
+            </Pressable>
+            <Pressable
+              style={[st.sourceBtn, st.sourceBtnCancel]}
+              onPress={() => setShowImageSource(false)}
+            >
+              <Text style={[st.sourceBtnTxt, { color: C.onSurface }]}>Bekor qilish</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
     </View>
   );
 }
 
 const st = StyleSheet.create({
+  sourceBackdrop: {
+    flex: 1,
+    width: "100%",
+    height: "100%",
+    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    justifyContent: "flex-end",
+    alignItems: "center",
+  },
+  sourceSheet: {
+    width: "100%",
+    maxWidth: 480,
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 20,
+    paddingTop: 10,
+    paddingBottom: 28,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  sourceHandle: {
+    alignSelf: "center",
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#D1D5DB",
+    marginBottom: 8,
+  },
+  sourceTitle: {
+    fontSize: 17,
+    fontWeight: "900",
+    color: "#0F172A",
+    textAlign: "center",
+  },
+  sourceSub: {
+    fontSize: 13,
+    color: "#64748B",
+    textAlign: "center",
+    marginBottom: 4,
+  },
+  sourceBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    backgroundColor: "#ECFDF5",
+    borderRadius: 12,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: "#A7F3D0",
+  },
+  sourceBtnCancel: {
+    backgroundColor: "#F1F5F9",
+    borderColor: "#E2E8F0",
+  },
+  sourceBtnTxt: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#065F46",
+  },
   root: { flex: 1, backgroundColor: C.surface },
   header: {
     flexDirection: "row",
