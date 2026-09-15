@@ -165,6 +165,7 @@ const [etaDrafts, setEtaDrafts] = useState<Record<string, string>>({});
 /** Buyurtma status tugmalari default yopiq — ko'z bosilganda ochiladi */
 const [statusUnlocked, setStatusUnlocked] = useState<Record<string, boolean>>({});
 const [rejectedSelections, setRejectedSelections] = useState<Record<string, Record<string, string>>>({});
+  const [expandedRejectKey, setExpandedRejectKey] = useState<string | null>(null);
 const [sellerBusy, setSellerBusy] = useState<string | null>(null);
 const [prodBusy, setProdBusy] = useState<string | null>(null);
 const [bannerEditForm, setBannerEditForm] = useState<any>({ title: "", image: "", link_type: "none", link_id: "", expires_at: "" });
@@ -715,43 +716,79 @@ const visibleProducts = useMemo(() => {
               <View key={o.id} style={st.card}>
                 <View style={st.rowBetween}>
                   <Text style={st.bold}>{o.number}</Text>
-                  <Text style={{ color: C.error, fontWeight: "900" }}>Sotuvchi rad etdi</Text>
+                  <Text style={{ color: C.error, fontWeight: "900" }}>
+                    {o.reject_mode === "partial" ? "Qisman rad" : "Sotuvchi rad etdi"}
+                  </Text>
                 </View>
                 <Text style={st.meta}>Sotuvchi: {o.rejected_seller?.name || "—"} {o.rejected_seller?.phone ? `• ${o.rejected_seller.phone}` : ""}</Text>
                 <Text style={st.meta}>Mijoz: {o.client_name} • {fmt(o.total)}</Text>
                 {!!o.seller_rejection?.reason && <Text style={st.returnAlert}>Sabab: {o.seller_rejection.reason}</Text>}
-                {o.admin_reminder_due_in_minutes != null && <Text style={st.meta}>Admin eslatmasigacha: {o.admin_reminder_due_in_minutes} daqiqa</Text>}
                 <View style={{ marginTop: S.sm, gap: S.md }}>
-                  {(o.replacement_options || []).map((entry: any) => (
-                    <View key={`${o.id}-${entry.item_index}`} style={st.detailBox}>
-                      <Text style={st.detailTitle}>Rad etilgan mahsulot #{entry.item_index + 1}</Text>
-                      <View style={{ flexDirection: "row", gap: S.sm, marginTop: 6 }}>
-                        {!!entry.original_item?.image && <Image source={{ uri: entry.original_item.image }} style={st.miniThumb} contentFit="cover" />}
-                        <View style={{ flex: 1 }}>
-                          <Text style={st.adminItemTxt}>{ml(entry.original_item?.name, lang)} × {entry.original_item?.qty}</Text>
-                          <Text style={st.meta}>{fmt((entry.original_item?.price || 0) * (entry.original_item?.qty || 0))}</Text>
-                        </View>
-                      </View>
-                      <Text style={st.sectionMiniTitle}>O'xshash mahsulotlar</Text>
-                      {(entry.similar_products || []).length === 0 && <Text style={st.meta}>O'xshash mahsulot topilmadi</Text>}
-                      {(entry.similar_products || []).map((candidate: any) => {
-                        const selected = rejectedSelections[o.id]?.[String(entry.item_index)] === candidate.product_id;
-                        return (
-                          <Pressable key={candidate.product_id} style={[st.detailBox, selected && { borderColor: C.success, borderWidth: 1.5 }]} onPress={() => setRejectedSelection(o.id, entry.item_index, candidate.product_id)}>
-                            <View style={{ flexDirection: "row", gap: S.sm }}>
-                              {!!candidate.image && <Image source={{ uri: candidate.image }} style={st.miniThumb} contentFit="cover" />}
-                              <View style={{ flex: 1 }}>
-                                <Text style={st.detailTitle}>{ml(candidate.name, lang)}</Text>
-                                <Text style={st.detailText}>{candidate.seller_name} • {fmt(candidate.price)}</Text>
-                                <Text style={st.detailText}>Qoldiq: {candidate.stock}</Text>
-                              </View>
-                              <View style={[st.miniChip, selected && { backgroundColor: C.success, borderColor: C.success }]}><Text style={[st.miniChipTxt, selected && { color: "#fff" }]}>{selected ? "Tanlandi" : "Tanlash"}</Text></View>
+                  {(o.replacement_options || []).map((entry: any) => {
+                    const rk = `${o.id}:${entry.item_index}`;
+                    const open = expandedRejectKey === rk;
+                    const selectedId = rejectedSelections[o.id]?.[String(entry.item_index)];
+                    return (
+                      <View key={rk} style={st.detailBox}>
+                        <Text style={st.detailTitle}>Rad etilgan mahsulot</Text>
+                        <View style={{ flexDirection: "row", gap: S.sm, marginTop: 6, alignItems: "center" }}>
+                          {!!entry.original_item?.image ? (
+                            <Image source={{ uri: entry.original_item.image }} style={st.rejectThumb} contentFit="cover" />
+                          ) : (
+                            <View style={[st.rejectThumb, { alignItems: "center", justifyContent: "center", backgroundColor: C.tertiary }]}>
+                              <Text style={{ color: C.muted, fontSize: 11 }}>Rasm yo'q</Text>
                             </View>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  ))}
+                          )}
+                          <View style={{ flex: 1 }}>
+                            <Text style={st.adminItemTxt}>{ml(entry.original_item?.name, lang)} × {entry.original_item?.qty}</Text>
+                            <Text style={st.meta}>{fmt((entry.original_item?.price || 0) * (entry.original_item?.qty || 0))}</Text>
+                            {!!selectedId && <Text style={{ color: C.success, fontWeight: "800", fontSize: 12, marginTop: 4 }}>Almashtirish tanlandi ✓</Text>}
+                          </View>
+                        </View>
+                        <Pressable
+                          style={[st.actBtn, { backgroundColor: C.brandDark, marginTop: S.sm }]}
+                          onPress={() => setExpandedRejectKey(open ? null : rk)}
+                        >
+                          <Text style={st.actTxt}>
+                            {open ? "Yopish" : "O'xshash mahsulotlar / Almashtirish"}
+                          </Text>
+                        </Pressable>
+                        {open && (
+                          <View style={{ marginTop: S.sm, gap: 8 }}>
+                            {(entry.similar_products || []).length === 0 && (
+                              <Text style={st.meta}>O'xshash mahsulot topilmadi — boshqa sotuvchida bor-yo'qligini tekshiring</Text>
+                            )}
+                            {(entry.similar_products || []).map((candidate: any) => {
+                              const selected = selectedId === candidate.product_id;
+                              return (
+                                <Pressable
+                                  key={candidate.product_id}
+                                  style={[st.detailBox, selected && { borderColor: C.success, borderWidth: 1.5 }]}
+                                  onPress={() => setRejectedSelection(o.id, entry.item_index, candidate.product_id)}
+                                >
+                                  <View style={{ flexDirection: "row", gap: S.sm, alignItems: "center" }}>
+                                    {!!candidate.image ? (
+                                      <Image source={{ uri: candidate.image }} style={st.rejectThumb} contentFit="cover" />
+                                    ) : (
+                                      <View style={[st.rejectThumb, { backgroundColor: C.tertiary }]} />
+                                    )}
+                                    <View style={{ flex: 1 }}>
+                                      <Text style={st.detailTitle}>{ml(candidate.name, lang)}</Text>
+                                      <Text style={st.detailText}>{candidate.seller_name} • {fmt(candidate.price)}</Text>
+                                      <Text style={st.detailText}>Qoldiq: {candidate.stock}</Text>
+                                    </View>
+                                    <View style={[st.miniChip, selected && { backgroundColor: C.success, borderColor: C.success }]}>
+                                      <Text style={[st.miniChipTxt, selected && { color: "#fff" }]}>{selected ? "Tanlandi" : "Tanlash"}</Text>
+                                    </View>
+                                  </View>
+                                </Pressable>
+                              );
+                            })}
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })}
                 </View>
                 <View style={{ flexDirection: "row", gap: S.sm, marginTop: S.md, alignItems: "center" }}>
                   <TextInput
@@ -763,7 +800,7 @@ const visibleProducts = useMemo(() => {
                     placeholderTextColor={C.muted}
                   />
                   <Pressable style={[st.actBtn, { backgroundColor: C.brandDark, flex: 1 }]} onPress={() => resolveRejectedOrder(o)}>
-                    <Text style={st.actTxt}>Boshqa sotuvchiga o'tkazish</Text>
+                    <Text style={st.actTxt}>Almashtirishni tasdiqlash</Text>
                   </Pressable>
                 </View>
               </View>
@@ -1444,7 +1481,7 @@ const visibleProducts = useMemo(() => {
                 testID="admin-set-save"
                 style={[st.actBtn, { backgroundColor: C.brandDark }]}
                 onPress={async () => {
-                  await api("/admin/settings", {
+                  const saved = await api("/admin/settings", {
                     method: "PUT",
                     body: {
                       delivery_fee: parseFloat(setForm.delivery_fee) || 15000,
@@ -1454,9 +1491,19 @@ const visibleProducts = useMemo(() => {
                       default_delivery_eta_days: parseInt(setForm.default_delivery_eta_days || "0", 10) || 0,
                     },
                   });
+                  const eta = String(saved?.default_delivery_eta_days ?? setForm.default_delivery_eta_days ?? "0");
+                  setSetForm((prev: any) => ({
+                    ...prev,
+                    delivery_fee: String(saved?.delivery_fee ?? prev.delivery_fee),
+                    min_order: String(saved?.min_order ?? prev.min_order),
+                    work_hours: saved?.work_hours ?? prev.work_hours,
+                    contact: saved?.contact ?? prev.contact,
+                    default_delivery_eta_days: eta,
+                  }));
                   setSettings((prev: any) => ({
                     ...prev,
-                    default_delivery_eta_days: parseInt(setForm.default_delivery_eta_days || "0", 10) || 0,
+                    ...(saved || {}),
+                    default_delivery_eta_days: parseInt(eta, 10) || 0,
                   }));
                   setMsg("Saqlandi ✓");
                 }}
@@ -1792,6 +1839,7 @@ const st = StyleSheet.create({
   courierSummaryRight: { alignItems: "flex-end", gap: 6 },
   categoryRowInfo: { flexDirection: "row", alignItems: "center", gap: S.sm, flex: 1 },
   subsectionCard: { marginTop: S.sm, padding: S.sm, borderRadius: R.sm, borderWidth: 1, borderColor: C.border, backgroundColor: C.surface },
+  rejectThumb: { width: 64, height: 64, borderRadius: 10, backgroundColor: C.tertiary },
   miniThumb: { width: 44, height: 44, borderRadius: R.sm, backgroundColor: C.tertiary },
   editPreview: { width: "100%", height: 180, borderRadius: R.md, backgroundColor: C.surface, marginBottom: S.sm },
   editPreviewPlaceholder: { width: "100%", height: 180, borderRadius: R.md, backgroundColor: C.surface, borderWidth: 1, borderColor: C.border, alignItems: "center", justifyContent: "center", marginBottom: S.sm },
