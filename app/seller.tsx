@@ -22,7 +22,7 @@ import { useLang, ml } from "@/src/lib/i18n";
 import { api } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
 import { getCurrentLocation } from "@/src/lib/geo";
-import { searchByImage } from "@/src/lib/imageSearch";
+import { searchByImage, searchOwnProductsByImage, pickerAssetToUri } from "@/src/lib/imageSearch";
 
 const TABS = [
   { k: "stats", l: "Statistika", icon: "stats-chart" },
@@ -124,6 +124,10 @@ export default function Seller() {
   const [similarLoading, setSimilarLoading] = useState(false);
   const [similarProducts, setSimilarProducts] = useState<any[]>([]);
   const [similarError, setSimilarError] = useState("");
+  const [ownSearchOpen, setOwnSearchOpen] = useState(false);
+  const [ownSearchLoading, setOwnSearchLoading] = useState(false);
+  const [ownSearchResults, setOwnSearchResults] = useState<any[]>([]);
+  const [ownSearchError, setOwnSearchError] = useState("");
   /** orderId -> { itemIndex: "accept" | "reject" } */
   const [itemDecisions, setItemDecisions] = useState<Record<string, Record<number, "accept" | "reject"> >>({});
 
@@ -254,7 +258,44 @@ export default function Seller() {
     setSimilarError("");
   };
 
+  const searchOwnByImage = async () => {
+    setOwnSearchError("");
+    setOwnSearchResults([]);
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        setOwnSearchError("Galereyaga ruxsat bering");
+        setOwnSearchOpen(true);
+        return;
+      }
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.6,
+        base64: true,
+        allowsMultipleSelection: false,
+      });
+      if (res.canceled || !res.assets?.[0]) return;
+      const uri = pickerAssetToUri(res.assets[0]);
+      if (!uri) {
+        setOwnSearchError("Rasm o'qilmadi");
+        setOwnSearchOpen(true);
+        return;
+      }
+      setOwnSearchOpen(true);
+      setOwnSearchLoading(true);
+      const items = await searchOwnProductsByImage(uri);
+      setOwnSearchResults(items);
+      if (!items.length) setOwnSearchError("O'z mahsulotlaringiz orasidan o'xshash topilmadi");
+    } catch (e: any) {
+      setOwnSearchOpen(true);
+      setOwnSearchError(e?.message || "Qidirishda xatolik");
+    } finally {
+      setOwnSearchLoading(false);
+    }
+  };
+
   const findSimilarByFormImage = async () => {
+
     const uri = form.images?.[0];
     if (!uri) {
       setMsg("Avval kamida bitta rasm yuklang");
@@ -883,18 +924,74 @@ export default function Seller() {
         {/* ——— PRODUCTS ——— */}
         {tab === "products" && (
           <>
-            <Pressable
-              style={st.addBtn}
-              onPress={() => {
-                setShowAddForm(!showAddForm);
-                setEditId(null);
-                setForm(emptyForm());
-                setMsg("");
-              }}
-            >
-              <Ionicons name="add" size={18} color="#fff" />
-              <Text style={{ color: "#fff", fontWeight: "800" }}>Mahsulot qo'shish</Text>
-            </Pressable>
+            <View style={{ flexDirection: "row", gap: S.sm, marginBottom: S.md }}>
+              <Pressable
+                style={[st.addBtn, { flex: 1, marginBottom: 0 }]}
+                onPress={() => {
+                  setShowAddForm(!showAddForm);
+                  setEditId(null);
+                  setForm(emptyForm());
+                  setMsg("");
+                  setSimilarProducts([]);
+                  setSimilarError("");
+                }}
+              >
+                <Ionicons name="add" size={18} color="#fff" />
+                <Text style={{ color: "#fff", fontWeight: "800" }}>Mahsulot qo'shish</Text>
+              </Pressable>
+              <Pressable
+                style={[st.addBtn, { flex: 1, marginBottom: 0, backgroundColor: C.inverse }]}
+                onPress={searchOwnByImage}
+                disabled={ownSearchLoading}
+              >
+                {ownSearchLoading ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Ionicons name="images-outline" size={18} color="#fff" />
+                )}
+                <Text style={{ color: "#fff", fontWeight: "800", fontSize: 13 }}>
+                  {ownSearchLoading ? "Qidirilmoqda..." : "O'zimnikidan qidirish"}
+                </Text>
+              </Pressable>
+            </View>
+
+            {ownSearchOpen && (
+              <View style={[st.form, { marginBottom: S.md }]}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                  <Text style={st.formLabel}>O'z mahsulotlarim (rasm)</Text>
+                  <Pressable onPress={() => { setOwnSearchOpen(false); setOwnSearchResults([]); setOwnSearchError(""); }}>
+                    <Ionicons name="close" size={20} color={C.muted} />
+                  </Pressable>
+                </View>
+                {!!ownSearchError && <Text style={st.similarErr}>{ownSearchError}</Text>}
+                {ownSearchLoading && <ActivityIndicator color={C.brandDark} style={{ marginVertical: 12 }} />}
+                {ownSearchResults.map((sp: any) => (
+                  <Pressable
+                    key={sp.id || sp.product_id}
+                    style={st.similarRow}
+                    onPress={() => {
+                      // mahsulotni tahrirlash uchun ochish
+                      const full = products.find((x) => x.id === (sp.id || sp.product_id));
+                      if (full) startEdit(full);
+                      else setMsg(ml(sp.name, lang) || "Mahsulot");
+                    }}
+                  >
+                    {!!(sp.image || sp.images?.[0]) && (
+                      <Image
+                        source={{ uri: typeof sp.images?.[0] === "string" ? sp.images[0] : sp.image || sp.images?.[0]?.url }}
+                        style={st.similarThumb}
+                        contentFit="cover"
+                      />
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={st.similarName} numberOfLines={1}>{ml(sp.name, lang) || "—"}</Text>
+                      <Text style={st.similarMeta}>{fmt(sp.display_price ?? sp.effective_price ?? sp.price ?? 0)} • qoldiq: {sp.stock_total_units ?? sp.stock ?? "—"}</Text>
+                    </View>
+                    <Ionicons name="create-outline" size={18} color={C.brandDark} />
+                  </Pressable>
+                ))}
+              </View>
+            )}
 
             {showAddForm && (
               <View style={st.form}>

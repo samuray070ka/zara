@@ -60,3 +60,33 @@ export function pickerAssetToUri(asset: {
   }
   return asset.uri || "";
 }
+
+/** Faqat joriy sotuvchi mahsulotlari orasidan rasm qidiruv */
+export async function searchOwnProductsByImage(imageUri: string): Promise<any[]> {
+  if (!imageUri) throw new Error("Rasm tanlanmagan");
+  const form = new FormData();
+  if (imageUri.startsWith("data:")) {
+    const res = await fetch(imageUri);
+    const blob = await res.blob();
+    const ext = blob.type?.includes("png") ? "png" : "jpg";
+    form.append("image", blob, `search.${ext}`);
+  } else {
+    const name = imageUri.split("/").pop() || "search.jpg";
+    const match = /\.(\w+)$/.exec(name);
+    const ext = (match?.[1] || "jpg").toLowerCase();
+    const type =
+      ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    form.append("image", {
+      uri: imageUri,
+      name: name.includes(".") ? name : `search.${ext}`,
+      type,
+    } as any);
+  }
+  const data = await api("/seller/search/by-image", {
+    method: "POST",
+    formData: form,
+  });
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.items)) return data.items;
+  return [];
+}

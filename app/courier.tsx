@@ -308,8 +308,39 @@ export default function Courier() {
   };
 
   const cancelTakenOrder = async (oid: string) => {
-    await api(`/courier/orders/${oid}/cancel`, { method: "POST" }).catch(() => {});
-    load();
+    try {
+      const ok =
+        Platform.OS === "web"
+          ? typeof window !== "undefined"
+            ? window.confirm(
+                "Buyurtmani bekor qilmoqchimisiz? Statistika yangilanadi, boshqa kuryer olishi mumkin bo'ladi."
+              )
+            : true
+          : await new Promise<boolean>((resolve) => {
+              Alert.alert(
+                "Tasdiqlash",
+                "Buyurtmani bekor qilmoqchimisiz? Statistika yangilanadi.",
+                [
+                  { text: "Yo'q", style: "cancel", onPress: () => resolve(false) },
+                  { text: "Ha", style: "destructive", onPress: () => resolve(true) },
+                ],
+                { cancelable: true }
+              );
+            });
+      if (!ok) return;
+      await api(`/courier/orders/${oid}/cancel`, { method: "POST" });
+      await load();
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        // web: minor feedback
+      }
+    } catch (e: any) {
+      const msg = e?.message || "Bekor qilib bo'lmadi";
+      if (Platform.OS === "web") {
+        if (typeof window !== "undefined") window.alert(msg);
+      } else {
+        Alert.alert("Xatolik", msg);
+      }
+    }
   };
 
   const openFinalizeModal = (order: any) => {
@@ -511,7 +542,7 @@ export default function Courier() {
                 <Pressable
                   testID={`courier-cancel-${o.id}`}
                   style={[st.btn, { flexBasis: "100%", backgroundColor: C.error }]}
-                  onPress={() => Alert.alert("Tasdiqlash", "Buyurtmani bekor qilmoqchimisiz? 1 soat ichida boshqa kuryer olishi mumkin bo'ladi.", [{ text: "Yo'q", style: "cancel" }, { text: "Ha", style: "destructive", onPress: () => cancelTakenOrder(o.id) }])}
+                  onPress={() => cancelTakenOrder(o.id)}
                 >
                   <Text style={st.btnTxt}>Qabulni bekor qilish</Text>
                 </Pressable>

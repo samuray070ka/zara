@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, Pressable, StyleSheet, ScrollView, TextInput, Modal, Platform } from "react-native";
+import { View, Text, Pressable, StyleSheet, ScrollView, TextInput, Modal, Platform, ActivityIndicator } from "react-native";
 import { WebView } from "react-native-webview";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -114,6 +114,8 @@ export default function Admin() {
   const { lang } = useLang();
   const [sec, setSec] = useState("dashboard");
   const [dash, setDash] = useState<any>(null);
+  const [lowStockItems, setLowStockItems] = useState<any[] | null>(null);
+  const [lowStockLoading, setLowStockLoading] = useState(false);
   const [orders, setOrders] = useState<any[]>([]);
   const [products, setProducts] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
@@ -374,7 +376,22 @@ const openBannerEditor = (banner: any) => {
 };
 
 
+  const openLowStock = async () => {
+    setLowStockLoading(true);
+    setLowStockItems(null);
+    try {
+      const res = await api("/admin/products/low-stock");
+      setLowStockItems(Array.isArray(res?.items) ? res.items : []);
+    } catch (e: any) {
+      setMsg(e?.message || "Yuklashda xatolik");
+      setLowStockItems([]);
+    } finally {
+      setLowStockLoading(false);
+    }
+  };
+
   const resolveRejectedOrder = async (order: any) => {
+
   const picks = rejectedSelections[order.id] || {};
   const replacements = (order.replacement_options || []).map((entry: any) => ({
     item_index: entry.item_index,
@@ -508,7 +525,57 @@ const visibleProducts = useMemo(() => {
               <Stat metric="new_orders" label="Yangi buyurtmalar" value={dash.new_orders} icon="alert-circle" color={C.warning} />
               <Stat metric="pending_products" label="Moderatsiyada mahsulot" value={dash.pending_products} icon="hourglass" color={C.warning} />
               <Stat metric="pending_sellers" label="Kutayotgan sotuvchi" value={dash.pending_sellers} icon="person-add" color={C.warning} />
+              <Pressable
+                style={[st.statCard, { borderLeftColor: C.brandDark, borderLeftWidth: 3 }]}
+                onPress={() => setMsg(`Jami mahsulotlar: ${dash.total_products || 0}`)}
+              >
+                <Ionicons name="cube" size={18} color={C.brandDark} />
+                <Text style={st.statVal}>{dash.total_products || 0}</Text>
+                <Text style={st.statLabel}>Jami mahsulotlar</Text>
+              </Pressable>
+              <Pressable
+                style={[st.statCard, { borderLeftColor: C.error, borderLeftWidth: 3 }]}
+                onPress={openLowStock}
+              >
+                <Ionicons name="alert-circle" size={18} color={C.error} />
+                <Text style={[st.statVal, { color: C.error }]}>{dash.low_stock_count || 0}</Text>
+                <Text style={st.statLabel}>10 tadan kam qolgan</Text>
+              </Pressable>
             </View>
+
+            {(lowStockLoading || lowStockItems !== null) && (
+              <View style={[st.detailBox, { marginTop: S.md }]}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: S.sm }}>
+                  <Text style={st.bold}>Kam qolgan mahsulotlar (10 dan kam)</Text>
+                  <Pressable onPress={() => setLowStockItems(null)}>
+                    <Ionicons name="close" size={20} color={C.muted} />
+                  </Pressable>
+                </View>
+                {lowStockLoading && (
+                  <ActivityIndicator color={C.brandDark} style={{ marginVertical: 16 }} />
+                )}
+                {!lowStockLoading && (lowStockItems || []).length === 0 && (
+                  <Text style={st.meta}>Barcha mahsulotlarda yetarli qoldiq bor</Text>
+                )}
+                {!lowStockLoading && (lowStockItems || []).map((p: any) => (
+                  <View key={p.id} style={{ flexDirection: "row", gap: S.sm, alignItems: "center", paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: C.border }}>
+                    {!!p.image ? (
+                      <Image source={{ uri: p.image }} style={{ width: 48, height: 48, borderRadius: 8 }} contentFit="cover" />
+                    ) : (
+                      <View style={{ width: 48, height: 48, borderRadius: 8, backgroundColor: C.tertiary }} />
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={st.detailTitle} numberOfLines={2}>{ml(p.name, lang)}</Text>
+                      <Text style={st.meta}>{p.seller_name}{p.seller_phone ? ` • ${p.seller_phone}` : ""}</Text>
+                    </View>
+                    <View style={{ alignItems: "flex-end" }}>
+                      <Text style={{ fontWeight: "900", color: C.error, fontSize: 15 }}>{p.stock} dona</Text>
+                      <Text style={st.meta}>{fmt(p.price)}</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
            <Pressable
   style={[st.actBtn, { backgroundColor: C.tertiary, marginTop: S.md, alignSelf: "flex-start" }]}
   onPress={() => {
