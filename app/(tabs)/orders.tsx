@@ -127,15 +127,25 @@ export default function Orders() {
                 </View>
               </View>
               <View style={{ flexDirection: "row", gap: 6, marginVertical: S.sm }}>
-                {o.items.slice(0, 4).map((i: any, idx: number) => (
-                  <Image key={idx} source={{ uri: i.image }} style={st.thumb} contentFit="cover" />
-                ))}
+                {o.items.slice(0, 4).map((i: any, idx: number) => {
+                  const uri = typeof i?.image === "string" && i.image.length > 8 ? i.image : null;
+                  return uri ? (
+                    <Image key={idx} source={{ uri }} style={st.thumb} contentFit="cover" />
+                  ) : (
+                    <View key={idx} style={[st.thumb, { alignItems: "center", justifyContent: "center" }]}>
+                      <Ionicons name="image-outline" size={18} color={C.muted} />
+                    </View>
+                  );
+                })}
                 {o.items.length > 4 && <View style={[st.thumb, { alignItems: "center", justifyContent: "center" }]}><Text style={{ fontWeight: "800", color: C.muted }}>+{o.items.length - 4}</Text></View>}
               </View>
               <View style={st.cardBottom}>
                 <Text style={st.date}>{new Date(o.created_at).toLocaleDateString()}</Text>
                 <Text style={st.total}>{fmt(o.total)}</Text>
               </View>
+              {!!o.delivery_eta_days && o.delivery_method === "courier" && ["new","confirmed","packing","courier"].includes(o.status) && (
+                <Text style={st.etaInfo}>Taxminiy yetib borish: {o.delivery_eta_days} kun</Text>
+              )}
               {!!o.returned_items_count && <Text style={st.returnInfo}>Qaytgan mahsulotlar: {o.returned_items_count} ta</Text>}
               {(o.status === "delivered" || o.status === "cancelled") && (
                 <Pressable testID={`order-reorder-${o.id}`} style={st.reorderBtn} onPress={() => reorder(o)}>
@@ -169,6 +179,7 @@ const st = StyleSheet.create({
   cardBottom: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   date: { color: C.muted, fontSize: 12 },
   total: { fontWeight: "900", fontSize: 15, color: C.onSurface },
+  etaInfo: { fontSize: 12, color: C.brandDark, fontWeight: "700", marginTop: 4 },
   returnInfo: { color: C.error, fontWeight: "800", fontSize: 12, marginTop: 6 },
   reorderBtn: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, marginTop: S.sm, backgroundColor: C.brandTint, borderRadius: R.sm, paddingVertical: 8 },
   reorderTxt: { color: C.brandDark, fontWeight: "800", fontSize: 13 },

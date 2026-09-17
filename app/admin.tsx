@@ -142,6 +142,7 @@ const [catForm, setCatForm] = useState({ name_uz: "", icon: "category", preview_
 const [bannerForm, setBannerForm] = useState({ image: "", title: "" });
 const [promoForm, setPromoForm] = useState({ code: "", value: "", type: "percent", min_cart: "", limit: "" });
 const [flashForm, setFlashForm] = useState({ product_id: "", price: "", hours: "24" });
+const [flashSearch, setFlashSearch] = useState("");
 const [courierForm, setCourierForm] = useState({ phone: "+998", first_name: "", zone: "" });
 const [setForm, setSetForm] = useState({
   delivery_fee: "",
@@ -1159,9 +1160,9 @@ const visibleProducts = useMemo(() => {
                     <View style={{ marginTop: S.sm }}>
                       <View style={st.courierStatGrid}>
                         <View style={st.courierStatBox}><Text style={st.courierStatVal}>{summary.deliveries || 0}</Text><Text style={st.courierStatLabel}>Resetdan keyin yetkazishlar</Text></View>
-                        <View style={st.courierStatBox}><Text style={st.courierStatVal}>{fmt(summary.earnings || 0)}</Text><Text style={st.courierStatLabel}>Resetdan keyin daromad</Text></View>
+                        <View style={st.courierStatBox}><Text style={st.courierStatVal}>{fmt(summary.cash_to_handover ?? summary.earnings ?? 0)}</Text><Text style={st.courierStatLabel}>Topshiriladigan summa</Text></View>
                         <View style={st.courierStatBox}><Text style={st.courierStatVal}>{summary.today_deliveries || 0}</Text><Text style={st.courierStatLabel}>Bugun yetkazildi</Text></View>
-                        <View style={st.courierStatBox}><Text style={st.courierStatVal}>{summary.today_taken_count || 0}</Text><Text style={st.courierStatLabel}>Bugun qabul qildi</Text></View>
+                        <View style={st.courierStatBox}><Text style={st.courierStatVal}>{fmt(summary.today_cash_to_handover ?? summary.today_earnings ?? 0)}</Text><Text style={st.courierStatLabel}>Bugun topshiriladigan</Text></View>
                       </View>
                       <View style={{ flexDirection: "row", gap: S.sm, marginTop: S.sm, flexWrap: "wrap" }}>
                         <Pressable
@@ -1464,7 +1465,33 @@ const visibleProducts = useMemo(() => {
 
           <>
             <Text style={st.formTitle}>Mahsulotni tanlab Flash Sale narxini belgilang</Text>
-            {products.filter((p) => p.status === "approved").map((p) => (
+            <TextInput
+              testID="admin-flash-search"
+              style={[st.input, { marginBottom: S.md }]}
+              value={flashSearch}
+              onChangeText={setFlashSearch}
+              placeholder="Mahsulot nomi yoki ID bo'yicha qidirish..."
+              placeholderTextColor={C.muted}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            {(() => {
+              const q = flashSearch.trim().toLowerCase();
+              const list = (products || []).filter((p) => {
+                if (p.status !== "approved") return false;
+                if (!q) return true;
+                const name = ml(p.name, lang).toLowerCase();
+                const id = String(p.id || "").toLowerCase();
+                return name.includes(q) || id.includes(q);
+              });
+              if (list.length === 0) {
+                return (
+                  <Text style={st.meta}>
+                    {q ? "Qidiruv bo'yicha mahsulot topilmadi" : "Tasdiqlangan mahsulot yo'q"}
+                  </Text>
+                );
+              }
+              return list.map((p) => (
               <View key={p.id} style={st.card}>
                 <View style={st.rowBetween}>
                   <Text style={st.bold} numberOfLines={1}>{ml(p.name, lang)}</Text>
@@ -1485,7 +1512,8 @@ const visibleProducts = useMemo(() => {
                   </Pressable>
                 )}
               </View>
-            ))}
+              ));
+            })()}
           </>
           )
         )}{sec === "reviews" && (
@@ -1822,7 +1850,7 @@ const visibleProducts = useMemo(() => {
           <Pressable style={st.modalCard} onPress={(e) => e.stopPropagation()}>
             <Text style={st.modalTitle}>Statistikani 0 qilish</Text>
             <Text style={st.modalBody}>
-              {resetTarget?.first_name} ({resetTarget?.phone}) kuryerining barcha statistikasi (yetkazishlar, daromad, bugungi hisoblar) 0 ga tushiriladi. Bu amalni qaytarib bo'lmaydi.
+              {resetTarget?.first_name} ({resetTarget?.phone}) kuryerining barcha statistikasi (yetkazishlar, topshiriladigan summa, bugungi hisoblar) 0 ga tushiriladi. Bu amalni qaytarib bo'lmaydi.
             </Text>
             <View style={st.modalStatsRow}>
               <View style={st.modalStatBox}>

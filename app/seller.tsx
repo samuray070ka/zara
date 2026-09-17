@@ -120,6 +120,7 @@ export default function Seller() {
   const [rejectPhrase, setRejectPhrase] = useState("");
 
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [similarLoading, setSimilarLoading] = useState(false);
   const [similarProducts, setSimilarProducts] = useState<any[]>([]);
@@ -128,6 +129,7 @@ export default function Seller() {
   const [ownSearchLoading, setOwnSearchLoading] = useState(false);
   const [ownSearchResults, setOwnSearchResults] = useState<any[]>([]);
   const [ownSearchError, setOwnSearchError] = useState("");
+  const [productSearch, setProductSearch] = useState("");
   /** orderId -> { itemIndex: "accept" | "reject" } */
   const [itemDecisions, setItemDecisions] = useState<Record<string, Record<number, "accept" | "reject"> >>({});
 
@@ -826,7 +828,7 @@ export default function Seller() {
           <Pressable
             key={tb.k}
             style={[st.tab, tab === tb.k && st.tabActive]}
-            onPress={() => setTab(tb.k)}
+            onPress={() => { setTab(tb.k); if (tb.k === "orders") setExpandedHistoryId(null); }}
           >
             <Ionicons
               name={tb.icon as any}
@@ -908,6 +910,74 @@ export default function Seller() {
                     </Animated.View>
                   ))}
                 </View>
+
+                {(() => {
+                  const lowList = (products || []).filter((x) => {
+                    const s = Number(x.stock ?? 0);
+                    return s > 0 && s < 10;
+                  });
+                  if (lowList.length === 0) return null;
+                  return (
+                    <View style={st.lowAlertCard}>
+                      <View style={st.lowAlertTop}>
+                        <View style={st.lowAlertIconWrap}>
+                          <Ionicons name="warning" size={20} color="#C2410C" />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={st.lowAlertTitle}>Zaxira kamayib bormoqda</Text>
+                          <Text style={st.lowAlertSub}>
+                            {lowList.length} ta mahsulotda 10 tadan kam qoldi
+                          </Text>
+                        </View>
+                        <View style={st.lowAlertBadge}>
+                          <Text style={st.lowAlertBadgeTxt}>{lowList.length}</Text>
+                        </View>
+                      </View>
+                      {lowList.map((p: any) => {
+                        const imgUri = getProductImage(p);
+                        const stockNum = Number(p.stock ?? 0);
+                        const unit =
+                          p.unit_type === "kg" || p.sale_mode === "kg" ? "kg" : "dona";
+                        return (
+                          <View key={p.id} style={st.lowAlertItem}>
+                            {imgUri ? (
+                              <Image
+                                source={{ uri: imgUri }}
+                                style={st.lowAlertImg}
+                                contentFit="cover"
+                              />
+                            ) : (
+                              <View style={[st.lowAlertImg, st.lowAlertImgEmpty]}>
+                                <Ionicons name="cube-outline" size={18} color="#EA580C" />
+                              </View>
+                            )}
+                            <View style={{ flex: 1, minWidth: 0 }}>
+                              <Text style={st.lowAlertName} numberOfLines={1}>
+                                {ml(p.name, lang)}
+                              </Text>
+                              <View style={st.lowAlertMetaRow}>
+                                <View style={st.lowAlertStockPill}>
+                                  <Text style={st.lowAlertStockTxt}>
+                                    {stockNum} {unit}
+                                  </Text>
+                                </View>
+                                <Text style={st.lowAlertHint}>10 tadan kam</Text>
+                              </View>
+                            </View>
+                            <Pressable
+                              style={st.lowAlertEdit}
+                              onPress={() => startEdit(p)}
+                            >
+                              <Ionicons name="create-outline" size={15} color="#fff" />
+                              <Text style={st.lowAlertEditTxt}>Tahrirlash</Text>
+                            </Pressable>
+                          </View>
+                        );
+                      })}
+                    </View>
+                  );
+                })()}
+
                 <Text style={st.secTitle}>Eng ko'p sotilgan</Text>
                 {(stats.top_products || []).map((p: any, i: number) => (
                   <View key={i} style={st.topRow}>
@@ -1017,14 +1087,76 @@ export default function Seller() {
               <Text style={st.empty}>Mahsulot yo'q. Yuqoridan qo'shing.</Text>
             )}
 
-            {products.map((p) => {
+            {products.length > 0 && (
+              <TextInput
+                style={[st.input, { marginBottom: S.md }]}
+                value={productSearch}
+                onChangeText={setProductSearch}
+                placeholder="Mahsulot nomi bo'yicha qidirish..."
+                placeholderTextColor={C.muted}
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+            )}
+
+            {(() => {
+              const low = (products || []).filter((x) => {
+                const s = Number(x.stock ?? 0);
+                return s > 0 && s < 10;
+              });
+              if (low.length === 0) return null;
+              return (
+                <View style={st.lowStockBanner}>
+                  <View style={st.lowStockIcon}>
+                    <Ionicons name="warning" size={20} color="#B45309" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={st.lowStockTitle}>Zaxira kam!</Text>
+                    <Text style={st.lowStockSub}>
+                      {low.length} ta mahsulotda 10 tadan kam qoldi. Tezroq to'ldiring.
+                    </Text>
+                  </View>
+                </View>
+              );
+            })()}
+
+            {(() => {
+              const q = productSearch.trim().toLowerCase();
+              const filtered = !q
+                ? products
+                : products.filter((pr) => {
+                    const name = ml(pr.name, lang).toLowerCase();
+                    const id = String(pr.id || "").toLowerCase();
+                    return name.includes(q) || id.includes(q);
+                  });
+              if (products.length > 0 && filtered.length === 0) {
+                return <Text style={st.empty}>Qidiruv bo'yicha mahsulot topilmadi</Text>;
+              }
+              return filtered.map((p) => {
               const expanded = expandedProductId === p.id;
               const boxPrice =
                 p.seller_box_price ?? (p.seller_price ?? p.price) * (p.units_per_box || 0);
               const imgUri = getProductImage(p);
 
+              const stockNum = Number(p.stock ?? 0);
+              const isLowStock = stockNum > 0 && stockNum < 10;
               return (
-                <View key={p.id} style={st.prodRow}>
+                <View
+                  key={p.id}
+                  style={[
+                    st.prodRow,
+                    isLowStock && st.prodRowLowStock,
+                    stockNum <= 0 && st.prodRowEmpty,
+                  ]}
+                >
+                  {isLowStock && (
+                    <View style={st.lowStockChip}>
+                      <Ionicons name="alert-circle" size={14} color="#B45309" />
+                      <Text style={st.lowStockChipTxt}>
+                        Faqat {stockNum} {p.unit_type === "kg" || p.sale_mode === "kg" ? "kg" : "dona"} qoldi — 10 tadan kam!
+                      </Text>
+                    </View>
+                  )}
                   <Pressable
                     style={st.prodTopRow}
                     onPress={() => setExpandedProductId(expanded ? null : p.id)}
@@ -1083,6 +1215,11 @@ export default function Seller() {
                             <Text style={[st.badgeTxt, { color: C.muted }]}>Tugagan</Text>
                           </View>
                         )}
+                        {Number(p.stock ?? 0) > 0 && Number(p.stock ?? 0) < 10 && (
+                          <View style={[st.badge, { backgroundColor: "#FEF3C7" }]}>
+                            <Text style={[st.badgeTxt, { color: "#B45309" }]}>Kam qoldi</Text>
+                          </View>
+                        )}
                         {p.hidden && (
                           <View style={[st.badge, { backgroundColor: C.tertiary }]}>
                             <Text style={[st.badgeTxt, { color: C.muted }]}>Yashirilgan</Text>
@@ -1125,7 +1262,8 @@ export default function Seller() {
                   )}
                 </View>
               );
-            })}
+            });
+            })()}
           </>
         )}
 
@@ -1308,90 +1446,119 @@ export default function Seller() {
                 o.seller_payment_confirmed ||
                 o.payment_received_by_seller
               );
+              const expanded = expandedHistoryId === o.id;
               return (
                 <View key={o.id} style={st.orderCard}>
-                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                    <Text style={{ fontWeight: "900", color: C.onSurface, fontSize: 15 }}>
-                      {o.number}
-                    </Text>
-                    <View style={[st.badge, { backgroundColor: C.tertiary }]}>
-                      <Text style={[st.badgeTxt, { color: C.onTertiary }]}>
-                        {STATUS_LABEL[o.status]}
-                      </Text>
-                    </View>
-                  </View>
-                  <Text style={st.orderMeta}>
-                    {o.delivery_method === "pickup"
-                      ? "🏪 O'zi olib ketadi"
-                      : "🛵 Kuryer"}
-                    {o.created_at ? ` • ${new Date(o.created_at).toLocaleString()}` : ""}
-                  </Text>
-                  {(o.items || []).map((i: any, idx: number) => (
-                    <Text key={idx} style={st.orderItem}>
-                      • {ml(i.name, lang)} × {i.qty} ={" "}
-                      {fmt((i.earn ?? i.seller_price ?? i.price) * i.qty)}
-                    </Text>
-                  ))}
-                  {o.status !== "delivered" && (
-                    <Text style={{ fontWeight: "900", color: C.brandDark, marginTop: 4 }}>
-                      Daromad: {fmt(o.earn_total)}
-                    </Text>
-                  )}
-                  {o.status === "delivered" && (
-                    <View style={st.payoutBox}>
-                      <Text style={st.payoutTitle}>Pul hisobi</Text>
-                      <View style={st.payoutRow}>
-                        <Text style={st.payoutLabel}>Olib ketilgan</Text>
-                        <Text style={st.payoutVal}>{fmt(payout.gross)}</Text>
-                      </View>
-                      {payout.returnedSum > 0 && (
-                        <View style={st.payoutRow}>
-                          <Text style={[st.payoutLabel, { color: C.error }]}>Qaytgan</Text>
-                          <Text style={[st.payoutVal, { color: C.error }]}>
-                            −{fmt(payout.returnedSum)}
+                  <Pressable
+                    onPress={() => setExpandedHistoryId(expanded ? null : o.id)}
+                    style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                        <Text style={{ fontWeight: "900", color: C.onSurface, fontSize: 15 }}>
+                          {o.number}
+                        </Text>
+                        <View style={[st.badge, { backgroundColor: C.tertiary }]}>
+                          <Text style={[st.badgeTxt, { color: C.onTertiary }]}>
+                            {STATUS_LABEL[o.status]}
                           </Text>
                         </View>
-                      )}
-                      <View style={[st.payoutRow, st.payoutRowTotal]}>
-                        <Text style={st.payoutTotalLabel}>Olishingiz kerak</Text>
-                        <Text style={st.payoutTotalVal}>{fmt(payout.net)}</Text>
                       </View>
-                      {!paymentConfirmed && (
-                        <Pressable
-                          style={[st.actBtn, { backgroundColor: C.success, marginTop: 8 }]}
-                          onPress={() => confirmPaymentReceived(o.id)}
-                        >
-                          <Text style={st.actTxt}>Pulni oldim</Text>
-                        </Pressable>
+                      <Text style={st.orderMeta}>
+                        {o.delivery_method === "pickup"
+                          ? "🏪 O'zi olib ketadi"
+                          : "🛵 Kuryer"}
+                        {o.created_at ? ` • ${new Date(o.created_at).toLocaleString()}` : ""}
+                      </Text>
+                      {!expanded && (
+                        <Text style={{ fontWeight: "800", color: C.brandDark, marginTop: 4, fontSize: 13 }}>
+                          Daromad: {fmt(o.status === "delivered" ? payout.net : (o.earn_total || 0))}
+                          {(o.items || []).length ? ` • ${(o.items || []).length} ta mahsulot` : ""}
+                        </Text>
                       )}
                     </View>
+                    <Ionicons
+                      name={expanded ? "chevron-up" : "chevron-down"}
+                      size={20}
+                      color={C.muted}
+                    />
+                  </Pressable>
+
+                  {expanded && (
+                    <View style={{ marginTop: S.sm }}>
+                      {(o.items || []).map((i: any, idx: number) => (
+                        <Text key={idx} style={st.orderItem}>
+                          • {ml(i.name, lang)} × {i.qty} ={" "}
+                          {fmt((i.earn ?? i.seller_price ?? i.price) * i.qty)}
+                        </Text>
+                      ))}
+                      {o.status !== "delivered" && (
+                        <Text style={{ fontWeight: "900", color: C.brandDark, marginTop: 4 }}>
+                          Daromad: {fmt(o.earn_total)}
+                        </Text>
+                      )}
+                      {paymentConfirmed && (
+                        <View style={st.paidBadge}>
+                          <Ionicons name="checkmark-circle" size={14} color={C.success} />
+                          <Text style={st.paidBadgeTxt}>Pul olingan</Text>
+                        </View>
+                      )}
+                      {o.status === "delivered" && (
+                        <View style={st.payoutBox}>
+                          <View style={st.payoutRow}>
+                            <Text style={st.payoutLabel}>Jami (sof)</Text>
+                            <Text style={st.payoutVal}>{fmt(payout.gross)}</Text>
+                          </View>
+                          {payout.returnedSum > 0 && (
+                            <View style={st.payoutRow}>
+                              <Text style={[st.payoutLabel, { color: C.error }]}>Qaytgan</Text>
+                              <Text style={[st.payoutVal, { color: C.error }]}>
+                                −{fmt(payout.returnedSum)}
+                              </Text>
+                            </View>
+                          )}
+                          <View style={[st.payoutRow, st.payoutRowTotal]}>
+                            <Text style={st.payoutTotalLabel}>Olishingiz kerak</Text>
+                            <Text style={st.payoutTotalVal}>{fmt(payout.net)}</Text>
+                          </View>
+                          {!paymentConfirmed && (
+                            <Pressable
+                              style={[st.actBtn, { backgroundColor: C.success, marginTop: 8 }]}
+                              onPress={() => confirmPaymentReceived(o.id)}
+                            >
+                              <Text style={st.actTxt}>Pulni oldim</Text>
+                            </Pressable>
+                          )}
+                        </View>
+                      )}
+                      <View style={{ flexDirection: "row", gap: S.sm, marginTop: S.sm }}>
+                        {o.status === "new" && (
+                          <>
+                            <Pressable
+                              style={[st.actBtn, { backgroundColor: C.brandDark }]}
+                              onPress={() => orderAction(o.id, "accept")}
+                            >
+                              <Text style={st.actTxt}>Qabul qilish</Text>
+                            </Pressable>
+                            <Pressable
+                              style={[st.actBtn, { backgroundColor: C.error }]}
+                              onPress={() => openRejectAllModal(o.id)}
+                            >
+                              <Text style={st.actTxt}>Rad etish</Text>
+                            </Pressable>
+                          </>
+                        )}
+                        {o.status === "confirmed" && (
+                          <Pressable
+                            style={[st.actBtn, { backgroundColor: C.inverse }]}
+                            onPress={() => orderAction(o.id, "packed")}
+                          >
+                            <Text style={st.actTxt}>Yig'ildi ✓</Text>
+                          </Pressable>
+                        )}
+                      </View>
+                    </View>
                   )}
-                  <View style={{ flexDirection: "row", gap: S.sm, marginTop: S.sm }}>
-                    {o.status === "new" && (
-                      <>
-                        <Pressable
-                          style={[st.actBtn, { backgroundColor: C.brandDark }]}
-                          onPress={() => orderAction(o.id, "accept")}
-                        >
-                          <Text style={st.actTxt}>Qabul qilish</Text>
-                        </Pressable>
-                        <Pressable
-                          style={[st.actBtn, { backgroundColor: C.error }]}
-                          onPress={() => openRejectAllModal(o.id)}
-                        >
-                          <Text style={st.actTxt}>Rad etish</Text>
-                        </Pressable>
-                      </>
-                    )}
-                    {o.status === "confirmed" && (
-                      <Pressable
-                        style={[st.actBtn, { backgroundColor: C.inverse }]}
-                        onPress={() => orderAction(o.id, "packed")}
-                      >
-                        <Text style={st.actTxt}>Yig'ildi ✓</Text>
-                      </Pressable>
-                    )}
-                  </View>
                 </View>
               );
             })}
@@ -1618,6 +1785,120 @@ const st = StyleSheet.create({
     color: C.onSurface,
     marginTop: S.xl,
     marginBottom: S.md,
+  },
+  lowAlertCard: {
+    marginTop: S.xl,
+    backgroundColor: "#FFF7ED",
+    borderRadius: R.lg,
+    borderWidth: 1,
+    borderColor: "#FDBA74",
+    overflow: "hidden",
+  },
+  lowAlertTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: S.md,
+    paddingVertical: 14,
+    backgroundColor: "#FFEDD5",
+    borderBottomWidth: 1,
+    borderBottomColor: "#FED7AA",
+  },
+  lowAlertIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#FFF7ED",
+    borderWidth: 1.5,
+    borderColor: "#FB923C",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  lowAlertTitle: {
+    fontSize: 14,
+    fontWeight: "900",
+    color: "#9A3412",
+  },
+  lowAlertSub: {
+    fontSize: 12,
+    color: "#C2410C",
+    fontWeight: "600",
+    marginTop: 2,
+  },
+  lowAlertBadge: {
+    minWidth: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#EA580C",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 8,
+  },
+  lowAlertBadgeTxt: {
+    color: "#fff",
+    fontWeight: "900",
+    fontSize: 13,
+  },
+  lowAlertItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingHorizontal: S.md,
+    paddingVertical: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: "#FED7AA",
+    backgroundColor: "#FFFBEB",
+  },
+  lowAlertImg: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: "#FFEDD5",
+  },
+  lowAlertImgEmpty: {
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  lowAlertName: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: C.onSurface,
+  },
+  lowAlertMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginTop: 4,
+  },
+  lowAlertStockPill: {
+    backgroundColor: "#FEE2E2",
+    borderRadius: R.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  lowAlertStockTxt: {
+    fontSize: 11,
+    fontWeight: "900",
+    color: "#DC2626",
+  },
+  lowAlertHint: {
+    fontSize: 11,
+    color: "#9A3412",
+    fontWeight: "600",
+  },
+  lowAlertEdit: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "#EA580C",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    height: 36,
+  },
+  lowAlertEditTxt: {
+    color: "#fff",
+    fontWeight: "800",
+    fontSize: 12,
   },
   topRow: {
     flexDirection: "row",

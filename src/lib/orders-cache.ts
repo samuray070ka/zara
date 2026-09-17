@@ -9,18 +9,20 @@ type CachePayload = { at: number; data: OrderLite[] };
 const memory = new Map<string, CachePayload>();
 const pending = new Map<string, Promise<OrderLite[]>>();
 
+
 function slimOrders(list: any[]): any[] {
   return (list || []).map((o) => {
     if (!o || typeof o !== "object") return o;
     const items = Array.isArray(o.items)
       ? o.items.map((it: any) => {
           const img = typeof it?.image === "string" ? it.image : "";
+          // Ro'yxat uchun: http va o'rtacha base64 thumb saqlanadi
           const keep =
             img.startsWith("http://") || img.startsWith("https://")
               ? img
-              : img.startsWith("data:") && img.length > 4000
+              : img.startsWith("data:") && img.length > 12000
               ? ""
-              : img.length > 4000
+              : img.length > 12000
               ? ""
               : img;
           return { ...it, image: keep };
