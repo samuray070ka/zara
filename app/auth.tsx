@@ -197,7 +197,7 @@ export default function Auth() {
                         placeholder={t("firstName")}
                         placeholderTextColor={C.muted}
                         onFocus={() => scrollToInput(220)}
-                      />
+                      />  
                       <TextInput
                         testID="auth-lastname-input"
                         style={st.input}
@@ -207,7 +207,7 @@ export default function Auth() {
                         placeholderTextColor={C.muted}
                         onFocus={() => scrollToInput(280)}
                       />
-                      <TextInput
+                      {/* <TextInput
                         testID="auth-address-input"
                         style={st.input}
                         value={addressText}
@@ -215,7 +215,7 @@ export default function Auth() {
                         placeholder="Ixtiyoriy: taxminiy manzil"
                         placeholderTextColor={C.muted}
                         onFocus={() => scrollToInput(340)}
-                      />
+                      /> */}
                     </>
                   )}
                   {!!err && (

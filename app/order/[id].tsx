@@ -109,7 +109,12 @@ export default function OrderDetail() {
               <Image source={{ uri: i.image }} style={st.itemImg} contentFit="cover" />
               <View style={{ flex: 1 }}>
                 <Text style={st.itemName}>{ml(i.name, lang)}{i.variation ? ` • ${i.variation}` : ""}</Text>
-                <Text style={st.itemMeta}>{i.qty} × {fmt(i.price)}</Text>
+                <Text style={st.itemMeta}>{i.qty}{String(i.sale_mode || i.unit_type || "") === "kg" ? " kg" : ""} × {fmt(i.price)}</Text>
+                {!!i.extra_qty && Number(i.extra_client_price) > 0 && (
+                  <Text style={[st.itemMeta, { color: C.brandDark, fontWeight: "700" }]}>
+                    + Ortiqcha {i.extra_qty} kg: {fmt(i.extra_client_price)}
+                  </Text>
+                )}
               </View>
               {i.delivery_status === "returned" && (
                 <View style={st.returnBadge}>
@@ -125,6 +130,9 @@ export default function OrderDetail() {
         <View style={st.card}>
           <View style={st.dRow}><Text style={st.dLabel}>{t("address")}</Text><Text style={st.dVal}>{o.address_text}</Text></View>
           <View style={st.dRow}><Text style={st.dLabel}>{t("delivery")}</Text><Text style={st.dVal}>{o.delivery_method === "courier" ? t("courierDelivery") : t("pickup")}</Text></View>
+          {!!o.delivery_eta_days && o.delivery_method === "courier" && (
+            <View style={st.dRow}><Text style={st.dLabel}>Yetib borish</Text><Text style={st.dVal}>{o.delivery_eta_days} kun</Text></View>
+          )}
           <View style={st.dRow}><Text style={st.dLabel}>To'lov</Text><Text style={st.dVal}>{t("cash")}</Text></View>
           {!!o.comment && <View style={st.dRow}><Text style={st.dLabel}>{t("comment")}</Text><Text style={st.dVal}>{o.comment}</Text></View>}
           {!!o.original_subtotal && o.original_subtotal !== o.subtotal && <View style={st.dRow}><Text style={st.dLabel}>Asl subtotal</Text><Text style={st.dVal}>{fmt(o.original_subtotal)}</Text></View>}

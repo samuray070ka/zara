@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { View, Text, Pressable, StyleSheet, ScrollView, Switch, Linking, Modal, Platform, Alert } from "react-native";
+import { View, Text, Pressable, StyleSheet, ScrollView, Switch, Linking, Modal, Platform, Alert, ActivityIndicator } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Image } from "expo-image";
@@ -48,23 +48,44 @@ const itemPiecePrice = (item: any) => {
   return price;
 };
 
-const receiptRowsHtml = (order: any) => (order.items || []).map((item: any, idx: number) => {
-  const qty = Number(item.qty || 0);
-  const linePrice = Number(item.price || 0);
-  const total = qty * linePrice;
-  const contents = itemUnitContents(item);
-  const piecePrice = itemPiecePrice(item);
-  return `
+const receiptRowsHtml = (order: any) => {
+  const rows: string[] = [];
+  let n = 0;
+  (order.items || []).forEach((item: any) => {
+    n += 1;
+    const qty = Number(item.qty || 0);
+    const linePrice = Number(item.price || 0);
+    const total = qty * linePrice;
+    const contents = itemUnitContents(item);
+    const piecePrice = itemPiecePrice(item);
+    rows.push(`
     <tr>
-      <td>${idx + 1}</td>
+      <td>${n}</td>
       <td>${escapeHtml(item.name?.uz || item.name || "Mahsulot")}${item.variation ? ` • ${escapeHtml(item.variation)}` : ""}</td>
       <td>${escapeHtml(fmt(linePrice))}</td>
       <td>${escapeHtml(contents)}</td>
       <td>${escapeHtml(fmt(piecePrice))}</td>
       <td>${qty}</td>
       <td>${escapeHtml(fmt(total))}</td>
-    </tr>`;
-}).join("");
+    </tr>`);
+    const extraQty = Number(item.extra_qty || 0);
+    const extraPay = Number(item.extra_client_price || 0);
+    if (extraQty > 0 && extraPay > 0) {
+      n += 1;
+      rows.push(`
+    <tr>
+      <td>${n}</td>
+      <td>${escapeHtml((item.name?.uz || item.name || "Mahsulot") + " — ortiqcha " + extraQty + " kg")}</td>
+      <td>${escapeHtml(fmt(extraPay))}</td>
+      <td>1 kg</td>
+      <td>${escapeHtml(fmt(extraPay))}</td>
+      <td>${extraQty}</td>
+      <td>${escapeHtml(fmt(extraPay))}</td>
+    </tr>`);
+    }
+  });
+  return rows.join("");
+};
 
 const buildReceiptHtml = (order: any) => {
   const subtotal = Number(order.subtotal || 0);
@@ -182,20 +203,44 @@ function ReceiptPreview({ order, onPrint }: { order: any; onPrint: () => void })
           <Text style={[st.receiptCell, st.receiptQty]}>Soni</Text>
           <Text style={[st.receiptCell, st.receiptSum]}>Jami</Text>
         </View>
-        {(order.items || []).map((item: any, idx: number) => {
-          const lineTotal = Number(item.qty || 0) * Number(item.price || 0);
-          return (
-            <View key={`${item.item_id || item.product_id || idx}-receipt`} style={st.receiptRow}>
-              <Text style={[st.receiptCell, st.receiptIdx]}>{idx + 1}</Text>
-              <Text style={[st.receiptCell, st.receiptName]} numberOfLines={2}>{item.name?.uz || item.name || "Mahsulot"}{item.variation ? ` • ${item.variation}` : ""}</Text>
-              <Text style={[st.receiptCell, st.receiptPrice]}>{fmt(item.price || 0)}</Text>
-              <Text style={[st.receiptCell, st.receiptQty]}>{itemUnitContents(item)}</Text>
-              <Text style={[st.receiptCell, st.receiptPrice]}>{fmt(itemPiecePrice(item))}</Text>
-              <Text style={[st.receiptCell, st.receiptQty]}>{item.qty}</Text>
-              <Text style={[st.receiptCell, st.receiptSum]}>{fmt(lineTotal)}</Text>
-            </View>
-          );
-        })}
+        {(() => {
+          const rows: any[] = [];
+          let n = 0;
+          (order.items || []).forEach((item: any, idx: number) => {
+            n += 1;
+            const lineTotal = Number(item.qty || 0) * Number(item.price || 0);
+            rows.push(
+              <View key={`${item.item_id || item.product_id || idx}-receipt`} style={st.receiptRow}>
+                <Text style={[st.receiptCell, st.receiptIdx]}>{n}</Text>
+                <Text style={[st.receiptCell, st.receiptName]} numberOfLines={2}>{item.name?.uz || item.name || "Mahsulot"}{item.variation ? ` • ${item.variation}` : ""}</Text>
+                <Text style={[st.receiptCell, st.receiptPrice]}>{fmt(item.price || 0)}</Text>
+                <Text style={[st.receiptCell, st.receiptQty]}>{itemUnitContents(item)}</Text>
+                <Text style={[st.receiptCell, st.receiptPrice]}>{fmt(itemPiecePrice(item))}</Text>
+                <Text style={[st.receiptCell, st.receiptQty]}>{item.qty}</Text>
+                <Text style={[st.receiptCell, st.receiptSum]}>{fmt(lineTotal)}</Text>
+              </View>
+            );
+            const extraQty = Number(item.extra_qty || 0);
+            const extraPay = Number(item.extra_client_price || 0);
+            if (extraQty > 0 && extraPay > 0) {
+              n += 1;
+              rows.push(
+                <View key={`${item.item_id || item.product_id || idx}-extra`} style={st.receiptRow}>
+                  <Text style={[st.receiptCell, st.receiptIdx]}>{n}</Text>
+                  <Text style={[st.receiptCell, st.receiptName]} numberOfLines={2}>
+                    {(item.name?.uz || item.name || "Mahsulot") + ` — ortiqcha ${extraQty} kg`}
+                  </Text>
+                  <Text style={[st.receiptCell, st.receiptPrice]}>{fmt(extraPay)}</Text>
+                  <Text style={[st.receiptCell, st.receiptQty]}>1 kg</Text>
+                  <Text style={[st.receiptCell, st.receiptPrice]}>{fmt(extraPay)}</Text>
+                  <Text style={[st.receiptCell, st.receiptQty]}>{extraQty}</Text>
+                  <Text style={[st.receiptCell, st.receiptSum]}>{fmt(extraPay)}</Text>
+                </View>
+              );
+            }
+          });
+          return rows;
+        })()}
       </View>
       <View style={st.receiptSummaryBox}>
         <View style={st.receiptSummaryRow}><Text style={st.receiptSummaryLabel}>Tovarlar</Text><Text style={st.receiptSummaryValue}>{fmt(order.subtotal || 0)}</Text></View>
@@ -231,29 +276,40 @@ export default function Courier() {
   const [savingFinalize, setSavingFinalize] = useState(false);
   const [finalizeError, setFinalizeError] = useState("");
   const [hubBusy, setHubBusy] = useState<string | null>(null);
+  const [expandedCardId, setExpandedCardId] = useState<string | null>(null);
+  const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
 
-  const load = useCallback(() => {
-    api("/courier/stats").then((s) => { setStats(s); setOnline(!!s?.online); }).catch(() => {});
+  const load = useCallback(async () => {
+    const tasks: Promise<any>[] = [
+      api("/courier/stats")
+        .then((s) => { setStats(s); setOnline(!!s?.online); })
+        .catch(() => {}),
+    ];
     if (isHub) {
-      api("/courier/hub-queue")
-        .then((data) => {
-          setAvailable(data?.waiting || []);
-          setReleased(data?.released || []);
-        })
-        .catch(() => {
-          api("/courier/available").then(setAvailable).catch(() => {});
-        });
+      tasks.push(
+        api("/courier/hub-queue")
+          .then((data) => {
+            setAvailable(data?.waiting || []);
+            setReleased(data?.released || []);
+          })
+          .catch(() =>
+            api("/courier/available")
+              .then(setAvailable)
+              .catch(() => {})
+          )
+      );
       setMine([]);
     } else {
-      api("/courier/available").then(setAvailable).catch(() => {});
-      api("/courier/my").then(setMine).catch(() => {});
+      tasks.push(api("/courier/available").then(setAvailable).catch(() => {}));
+      tasks.push(api("/courier/my").then(setMine).catch(() => {}));
       setReleased([]);
     }
+    await Promise.all(tasks);
   }, [isHub]);
 
   useFocusEffect(useCallback(() => {
     load();
-    const iv = setInterval(load, 15000);
+    const iv = setInterval(load, 30000);
     return () => clearInterval(iv);
   }, [load]));
 
@@ -293,15 +349,23 @@ export default function Courier() {
   };
 
   const hubCheck = async (order: any) => {
-    if (!order?.id) return;
+    if (!order?.id || hubBusy) return;
     setHubBusy(order.id);
     try {
       await api(`/courier/orders/${order.id}/hub-check`, { method: "POST" });
-      // Chekni darhol ochish — admin kuryer vazifasi
+      // Optimistik: ro'yxatdan darhol olib tashlash
+      setAvailable((prev) => (prev || []).filter((x: any) => x.id !== order.id));
+      setReleased((prev) => {
+        const exists = (prev || []).some((x: any) => x.id === order.id);
+        return exists ? prev : [...(prev || []), { ...order, admin_courier_checked_at: new Date().toISOString() }];
+      });
       printReceipt(order);
-      load();
+      await load();
     } catch (e: any) {
-      Alert.alert("Xatolik", e?.message || "Hub-check muvaffaqiyatsiz");
+      const msg = e?.message || "Hub-check muvaffaqiyatsiz";
+      if (Platform.OS === "web" && typeof window !== "undefined") window.alert(msg);
+      else Alert.alert("Xatolik", msg);
+      await load();
     } finally {
       setHubBusy(null);
     }
@@ -426,7 +490,12 @@ export default function Courier() {
         <View key={`${item.item_id || item.product_id || idx}-${idx}`} style={[st.itemLine, compact && { paddingVertical: 6 }]}> 
           <View style={{ flex: 1 }}>
             <Text style={st.itemName} numberOfLines={2}>{item.name?.uz || item.name || "Mahsulot"}{item.variation ? ` • ${item.variation}` : ""}</Text>
-            <Text style={st.itemMeta}>{item.qty} × {fmt(item.price || 0)}</Text>
+            <Text style={st.itemMeta}>{item.qty}{String(item.sale_mode || item.unit_type || "") === "kg" ? " kg" : ""} × {fmt(item.price || 0)}</Text>
+            {!!item.extra_qty && Number(item.extra_client_price) > 0 && (
+              <Text style={[st.itemMeta, { color: C.brandDark, fontWeight: "700" }]}>
+                + Ortiqcha {item.extra_qty} kg: {fmt(item.extra_client_price)}
+              </Text>
+            )}
           </View>
           {item.delivery_status === "returned" && (
             <View style={st.returnBadge}>
@@ -527,7 +596,13 @@ export default function Courier() {
             <Text style={st.meta}>👤 {o.client_name} • {o.client_phone}</Text>
             <Text style={st.itemHeader}>Mahsulotlar</Text>
             <ItemLines items={o.items || []} compact />
-            <ReceiptPreview order={o} onPrint={() => printReceipt(o)} />
+            {expandedCardId === o.id ? (
+              <ReceiptPreview order={o} onPrint={() => printReceipt(o)} />
+            ) : (
+              <Pressable onPress={() => setExpandedCardId(o.id)} style={{ marginTop: 8, paddingVertical: 8 }}>
+                <Text style={{ color: C.brandDark, fontWeight: "800", fontSize: 12 }}>Chekni korish / ochish</Text>
+              </Pressable>
+            )}
             {!!o.delivery_eta_days && <Text style={st.resetInfo}>Taxminiy yetib borish: {o.delivery_eta_days} kun</Text>}
             {!!o.can_cancel_courier && <Text style={st.resetInfo}>Bekor qilish mumkin: {o.courier_cancel_deadline ? new Date(o.courier_cancel_deadline).toLocaleString() : "1 soat ichida"}</Text>}
             <View style={{ flexDirection: "row", gap: S.sm, marginTop: S.md, flexWrap: "wrap" }}>
@@ -557,7 +632,7 @@ export default function Courier() {
             <Text style={st.empty}>Barcha buyurtmalar avval shu yerda. Chek chiqaring, keyin oddiy kuryerlarga ochiladi.</Text>
             {available.length === 0 && <Text style={[st.empty, { marginTop: 8 }]}>Hozircha kutayotgan buyurtma yo'q</Text>}
             {available.map((o, i) => (
-              <Animated.View key={o.id} entering={FadeInDown.delay(i * 80).springify()} style={st.card}>
+              <Animated.View key={o.id} entering={i < 6 ? FadeInDown.delay(i * 40).springify() : undefined} style={st.card}>
                 <Text style={st.orderNum}>{o.number} • {fmt(o.total)}</Text>
                 <View style={st.routeRow}>
                   <View style={st.routeDot} />
@@ -570,15 +645,28 @@ export default function Courier() {
                 <Text style={st.meta}>👤 {o.client_name} • {o.client_phone}</Text>
                 <Text style={st.itemHeader}>Mahsulotlar</Text>
                 <ItemLines items={o.items || []} compact />
-                <ReceiptPreview order={o} onPrint={() => printReceipt(o)} />
+                {expandedCardId === o.id ? (
+              <ReceiptPreview order={o} onPrint={() => printReceipt(o)} />
+            ) : (
+              <Pressable onPress={() => setExpandedCardId(o.id)} style={{ marginTop: 8, paddingVertical: 8 }}>
+                <Text style={{ color: C.brandDark, fontWeight: "800", fontSize: 12 }}>Chekni korish / ochish</Text>
+              </Pressable>
+            )}
                 <View style={{ flexDirection: "row", gap: S.sm, marginTop: S.md, flexWrap: "wrap" }}>
                   <Pressable
                     testID={`admin-courier-hub-check-${o.id}`}
-                    disabled={hubBusy === o.id}
-                    style={[st.btn, { flex: 1, backgroundColor: C.success, opacity: hubBusy === o.id ? 0.6 : 1 }]}
+                    disabled={!!hubBusy}
+                    style={[st.btn, { flex: 1, backgroundColor: C.success, opacity: hubBusy ? 0.7 : 1, flexDirection: "row", gap: 8, justifyContent: "center" }]}
                     onPress={() => hubCheck(o)}
                   >
-                    <Text style={st.btnTxt}>{hubBusy === o.id ? "Kutilmoqda..." : "Qabul + chek + kuryerga"}</Text>
+                    {hubBusy === o.id ? (
+                      <>
+                        <ActivityIndicator color="#fff" size="small" />
+                        <Text style={st.btnTxt}>Yuborilmoqda...</Text>
+                      </>
+                    ) : (
+                      <Text style={st.btnTxt}>Qabul + chek + kuryerga</Text>
+                    )}
                   </Pressable>
                 </View>
               </Animated.View>
@@ -594,7 +682,13 @@ export default function Courier() {
                   ✓ Hub-check: {o.admin_courier_checked_at ? new Date(o.admin_courier_checked_at).toLocaleString() : "—"}
                 </Text>
                 <Text style={st.meta}>Oddiy kuryer hali olmagan — kutilyapti</Text>
-                <ReceiptPreview order={o} onPrint={() => printReceipt(o)} />
+                {expandedCardId === o.id ? (
+              <ReceiptPreview order={o} onPrint={() => printReceipt(o)} />
+            ) : (
+              <Pressable onPress={() => setExpandedCardId(o.id)} style={{ marginTop: 8, paddingVertical: 8 }}>
+                <Text style={{ color: C.brandDark, fontWeight: "800", fontSize: 12 }}>Chekni korish / ochish</Text>
+              </Pressable>
+            )}
               </View>
             ))}
           </>
@@ -604,7 +698,7 @@ export default function Courier() {
             {!online && <Text style={st.empty}>Takliflarni ko'rish uchun Onlayn rejimga o'ting</Text>}
             {online && available.length === 0 && <Text style={st.empty}>Hozircha yangi taklif yo'q (admin kuryer chek chiqargach chiqadi)</Text>}
             {online && available.map((o, i) => (
-              <Animated.View key={o.id} entering={FadeInDown.delay(i * 80).springify()} style={st.card}>
+              <Animated.View key={o.id} entering={i < 6 ? FadeInDown.delay(i * 40).springify() : undefined} style={st.card}>
                 <Text style={st.orderNum}>{o.number}</Text>
                 <View style={st.routeRow}>
                   <View style={st.routeDot} />
@@ -643,18 +737,45 @@ export default function Courier() {
 
         {!isHub && <Text style={st.secTitle}>Tarix</Text>}
         {!isHub && mine.filter((o) => o.status === "delivered").length === 0 && <Text style={st.empty}>Hali yetkazishlar yo'q</Text>}
-        {!isHub && mine.filter((o) => o.status === "delivered").map((o) => (
-          <View key={o.id} style={[st.card, { opacity: 0.92 }]}> 
-            <View style={{ flexDirection: "row", justifyContent: "space-between", gap: S.sm }}>
-              <Text style={st.orderNum}>{o.number}</Text>
-              <Text style={{ color: C.success, fontWeight: "800", fontSize: 12 }}>✓ Yetkazildi</Text>
-            </View>
-            <Text style={st.meta}>{o.address_text}</Text>
-            {!!o.returned_items_count && <Text style={st.returnSummary}>Qaytgan mahsulotlar: {o.returned_items_count} ta</Text>}
-            <ItemLines items={o.items || []} compact />
-            <Text style={[st.meta, { fontWeight: "800", color: C.brandDark }]}>Yakuniy buyurtma summasi: {fmt(o.total || 0)}</Text>
+        {!isHub && mine.filter((o) => o.status === "delivered").map((o) => {
+          const expanded = expandedHistoryId === o.id;
+          const itemsCount = (o.items || []).length;
+          return (
+          <View key={o.id} style={[st.card, { opacity: 0.95 }]}>
+            <Pressable
+              onPress={() => setExpandedHistoryId(expanded ? null : o.id)}
+              style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+            >
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between", gap: S.sm, alignItems: "center" }}>
+                  <Text style={st.orderNum}>{o.number}</Text>
+                  <Text style={{ color: C.success, fontWeight: "800", fontSize: 12 }}>✓ Yetkazildi</Text>
+                </View>
+                <Text style={st.meta} numberOfLines={expanded ? 4 : 1}>{o.address_text}</Text>
+                {!expanded && (
+                  <Text style={[st.meta, { fontWeight: "800", color: C.brandDark, marginTop: 4 }]}>
+                    {fmt(o.total || 0)}
+                    {itemsCount ? ` • ${itemsCount} ta mahsulot` : ""}
+                    {o.returned_items_count ? ` • Qaytgan: ${o.returned_items_count}` : ""}
+                  </Text>
+                )}
+              </View>
+              <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={20} color={C.muted} />
+            </Pressable>
+            {expanded && (
+              <View style={{ marginTop: S.sm }}>
+                {!!o.returned_items_count && (
+                  <Text style={st.returnSummary}>Qaytgan mahsulotlar: {o.returned_items_count} ta</Text>
+                )}
+                <ItemLines items={o.items || []} compact />
+                <Text style={[st.meta, { fontWeight: "800", color: C.brandDark, marginTop: 6 }]}>
+                  Yakuniy buyurtma summasi: {fmt(o.total || 0)}
+                </Text>
+              </View>
+            )}
           </View>
-        ))}
+          );
+        })}
       </ScrollView>
 
       <Modal visible={!!finalizingOrder} transparent animationType="slide" onRequestClose={closeFinalizeModal}>

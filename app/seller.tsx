@@ -130,6 +130,9 @@ export default function Seller() {
   const [ownSearchResults, setOwnSearchResults] = useState<any[]>([]);
   const [ownSearchError, setOwnSearchError] = useState("");
   const [productSearch, setProductSearch] = useState("");
+  /** orderId -> itemIndex -> { extra_qty, extra_price } */
+  const [kgExtraDraft, setKgExtraDraft] = useState<Record<string, Record<number, { extra_qty: string; extra_price: string }>>>({});
+
   /** orderId -> { itemIndex: "accept" | "reject" } */
   const [itemDecisions, setItemDecisions] = useState<Record<string, Record<number, "accept" | "reject"> >>({});
 
@@ -519,6 +522,22 @@ export default function Seller() {
           action: getItemDecision(oid, idx, orderItems.length),
         }));
       }
+      // Yig'ildi: kg mahsulotlar uchun ortiqcha og'irlik
+      if (action === "packed") {
+        const draft = kgExtraDraft[oid] || {};
+        const itemsSrc = orderItems || (orders.find((x) => x.id === oid)?.items || []);
+        const kg_extras: any[] = [];
+        itemsSrc.forEach((it: any, idx: number) => {
+          if (!isOrderItemKg(it)) return;
+          const d = draft[idx] || { extra_qty: "", extra_price: "" };
+          const eq = parseFloat(String(d.extra_qty || "").replace(",", ".")) || 0;
+          const ep = parseFloat(String(d.extra_price || "").replace(",", ".")) || 0;
+          if (eq > 0 || ep > 0) {
+            kg_extras.push({ index: idx, extra_qty: eq, extra_price: ep });
+          }
+        });
+        if (kg_extras.length) body.kg_extras = kg_extras;
+      }
       const res = await api(`/seller/orders/${oid}/action`, { method: "POST", body });
       setItemDecisions((prev) => {
         const next = { ...prev };
@@ -565,6 +584,19 @@ export default function Seller() {
     } finally {
       setOrderBusy(null);
     }
+  };
+
+  const isOrderItemKg = (item: any) => {
+    const mode = String(item?.sale_mode || item?.unit_type || "").toLowerCase();
+    if (mode === "kg") return true;
+    const pid = item?.product_id;
+    if (pid) {
+      const prod = products.find((x) => x.id === pid);
+      if (prod && (String(prod.unit_type || "").toLowerCase() === "kg" || String(prod.sale_mode || "").toLowerCase() === "kg")) {
+        return true;
+      }
+    }
+    return false;
   };
 
   const getOrderPayout = (o: any) => {
@@ -1486,12 +1518,81 @@ export default function Seller() {
 
                   {expanded && (
                     <View style={{ marginTop: S.sm }}>
-                      {(o.items || []).map((i: any, idx: number) => (
-                        <Text key={idx} style={st.orderItem}>
-                          • {ml(i.name, lang)} × {i.qty} ={" "}
-                          {fmt((i.earn ?? i.seller_price ?? i.price) * i.qty)}
+                      {(o.items || []).map((i: any, idx: number) => {
+                        const isKg = isOrderItemKg(i);
+                        const draft = (kgExtraDraft[o.id] || {})[idx] || { extra_qty: "", extra_price: "" };
+                        return (
+                          <View key={idx} style={{ marginBottom: 8 }}>
+                            <Text style={st.orderItem}>
+                              • {ml(i.name, lang)} × {i.qty}
+                              {isKg ? " kg" : ""} ={" "}
+                              {fmt((i.earn ?? i.seller_price ?? i.price) * i.qty)}
+                              {i.extra_qty ? ` +${i.extra_qty} kg ortiqcha` : ""}
+                            </Text>
+                            {i.extra_client_price != null && Number(i.extra_client_price) > 0 && (
+                              <Text style={{ fontSize: 11, color: C.brandDark, fontWeight: "700", marginLeft: 8 }}>
+                                Ortiqcha: {fmt(i.extra_seller_price || 0)}
+                                {i.extra_markup_percent
+                                  ? ` + ${i.extra_markup_percent}% = ${fmt(i.extra_client_price)}`
+                                  : ""}
+                              </Text>
+                            )}
+                            {o.status === "confirmed" && isKg && (
+                              <View style={st.kgExtraBox}>
+                                <Text style={st.kgExtraBoxTitle}>Ortiqcha og'irlik (kg)</Text>
+                                <Text style={st.kgExtraBoxHint}>
+                                  Buyurtmadan ortiq chiqsa — kg va narxni yozing
+                                </Text>
+                                <View style={st.kgExtraRow}>
+                                  <View style={{ flex: 1, minWidth: 100 }}>
+                                    <Text style={st.kgExtraLabel}>Ortiqcha (kg)</Text>
+                                    <TextInput
+                                      style={[st.input, st.kgExtraInput]}
+                                      value={draft.extra_qty}
+                                      onChangeText={(v) =>
+                                        setKgExtraDraft((prev) => ({
+                                          ...prev,
+                                          [o.id]: {
+                                            ...(prev[o.id] || {}),
+                                            [idx]: { ...draft, extra_qty: v },
+                                          },
+                                        }))
+                                      }
+                                      placeholder="masalan: 0.2"
+                                      placeholderTextColor={C.muted}
+                                      keyboardType="decimal-pad"
+                                    />
+                                  </View>
+                                  <View style={{ flex: 1, minWidth: 100 }}>
+                                    <Text style={st.kgExtraLabel}>Ortiqcha narxi (so'm)</Text>
+                                    <TextInput
+                                      style={[st.input, st.kgExtraInput]}
+                                      value={draft.extra_price}
+                                      onChangeText={(v) =>
+                                        setKgExtraDraft((prev) => ({
+                                          ...prev,
+                                          [o.id]: {
+                                            ...(prev[o.id] || {}),
+                                            [idx]: { ...draft, extra_price: v },
+                                          },
+                                        }))
+                                      }
+                                      placeholder="masalan: 5000"
+                                      placeholderTextColor={C.muted}
+                                      keyboardType="numeric"
+                                    />
+                                  </View>
+                                </View>
+                              </View>
+                            )}
+                          </View>
+                        );
+                      })}
+                      {o.status === "confirmed" && !(o.items || []).some((it: any) => isOrderItemKg(it)) && (
+                        <Text style={{ fontSize: 12, color: C.muted, marginTop: 6, fontStyle: "italic" }}>
+                          Bu buyurtmada kg mahsulot yo'q — ortiqcha kg faqat kg bilan kiritilgan mahsulotlarda.
                         </Text>
-                      ))}
+                      )}
                       {o.status !== "delivered" && (
                         <Text style={{ fontWeight: "900", color: C.brandDark, marginTop: 4 }}>
                           Daromad: {fmt(o.earn_total)}
@@ -1551,7 +1652,7 @@ export default function Seller() {
                         {o.status === "confirmed" && (
                           <Pressable
                             style={[st.actBtn, { backgroundColor: C.inverse }]}
-                            onPress={() => orderAction(o.id, "packed")}
+                            onPress={() => orderAction(o.id, "packed", o.items || [])}
                           >
                             <Text style={st.actTxt}>Yig'ildi ✓</Text>
                           </Pressable>

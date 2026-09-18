@@ -16,7 +16,7 @@ import { searchByImage, pickerAssetToUri } from "@/src/lib/imageSearch";
 const SECTIONS = [
   { k: "dashboard", l: "Dashboard", icon: "speedometer" },
   { k: "orders", l: "Buyurtmalar", icon: "receipt" },
-  { k: "rejected_orders", l: "Rad etilganlar", icon: "alert-circle" },
+  // { k: "rejected_orders", l: "Rad etilganlar", icon: "alert-circle" },
   { k: "products", l: "Mahsulotlar", icon: "cube" },
   { k: "sellers", l: "Sotuvchilar", icon: "storefront" },
   { k: "clients", l: "Mijozlar", icon: "people" },
@@ -150,6 +150,7 @@ const [setForm, setSetForm] = useState({
   work_hours: "",
   contact: "",
   default_markup_percent: "",
+    kg_extra_markup_percent: "",
   default_delivery_eta_days: "",
 });
 const [resetTarget, setResetTarget] = useState<any>(null);
@@ -249,6 +250,7 @@ const [dashboardResetConfirmText, setDashboardResetConfirmText] = useState("");
     work_hours: r.work_hours || "",
     contact: r.contact || "",
     default_markup_percent: String(r.default_markup_percent ?? "0"),
+    kg_extra_markup_percent: String(r.kg_extra_markup_percent ?? "0"),
     default_delivery_eta_days: String(r.default_delivery_eta_days ?? ""),
   });
 }
@@ -772,7 +774,7 @@ const visibleProducts = useMemo(() => {
         ))
         )}
 
-        {sec === "rejected_orders" && (
+        {/* {sec === "rejected_orders" && (
           loadingSec === "rejected_orders" ? (
             <SectionLoader label="Rad etilgan buyurtmalar yuklanmoqda..." />
           ) : (
@@ -875,7 +877,7 @@ const visibleProducts = useMemo(() => {
             ))}
           </>
           )
-        )}
+        )} */}
 
         {sec === "products" && (
           <>
@@ -1616,6 +1618,12 @@ const visibleProducts = useMemo(() => {
               <TextInput testID="admin-default-markup" style={st.input} value={setForm.default_markup_percent} onChangeText={(v) => setSetForm({ ...setForm, default_markup_percent: v })} keyboardType="numeric" placeholder="masalan: 10" placeholderTextColor={C.muted} />
               <Pressable testID="admin-default-markup-save" style={[st.actBtn, { backgroundColor: C.brandDark }]} onPress={async () => { await api("/admin/settings", { method: "PUT", body: { default_markup_percent: parseFloat(setForm.default_markup_percent) || 0 } }); setMsg("Standart ustama saqlandi ✓"); }}>
                 <Text style={st.actTxt}>Standartni saqlash</Text>
+              </Pressable>
+              <Text style={[st.formTitle, { marginTop: S.lg }]}>Ortiqcha kg foizi (%)</Text>
+              <Text style={st.meta}>Sotuvchi ortiqcha kg uchun yozgan summaga qo'shiladigan moderator foizi. Chek va mijozda ko'rinadi.</Text>
+              <TextInput testID="admin-kg-extra-markup" style={st.input} value={setForm.kg_extra_markup_percent} onChangeText={(v) => setSetForm({ ...setForm, kg_extra_markup_percent: v })} keyboardType="numeric" placeholder="masalan: 10" placeholderTextColor={C.muted} />
+              <Pressable testID="admin-kg-extra-markup-save" style={[st.actBtn, { backgroundColor: C.brandDark }]} onPress={async () => { await api("/admin/settings", { method: "PUT", body: { kg_extra_markup_percent: parseFloat(setForm.kg_extra_markup_percent) || 0 } }); setMsg("Ortiqcha kg foizi saqlandi ✓"); }}>
+                <Text style={st.actTxt}>Saqlash</Text>
               </Pressable>
 
               <View style={{ height: 1, backgroundColor: C.border, marginVertical: S.sm }} />
