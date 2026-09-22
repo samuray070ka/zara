@@ -135,6 +135,7 @@ const buildReceiptHtml = (order: any) => {
         <div><strong>Клиент:</strong> ${escapeHtml(order.client_name || "")}</div>
         <div><strong>Тел:</strong> ${escapeHtml(order.client_phone || "")}</div>
         <div><strong>Адрес:</strong> ${escapeHtml(order.address_text || "")}</div>
+        ${order.client_note ? `<div><strong>Izoh:</strong> ${escapeHtml(order.client_note)}</div>` : ""}
       </div>
       <div>
         <div><strong>Продавец:</strong> ${escapeHtml(RECEIPT_SELLER_NAME)}</div>
@@ -187,6 +188,9 @@ function ReceiptPreview({ order, onPrint }: { order: any; onPrint: () => void })
           <Text style={st.receiptMetaLine}><Text style={st.receiptMetaLabel}>Mijoz:</Text> {order.client_name}</Text>
           <Text style={st.receiptMetaLine}><Text style={st.receiptMetaLabel}>Tel:</Text> {order.client_phone}</Text>
           <Text style={st.receiptMetaLine}><Text style={st.receiptMetaLabel}>Manzil:</Text> {order.address_text}</Text>
+          {!!order.client_note && (
+            <Text style={st.receiptMetaLine}><Text style={st.receiptMetaLabel}>Izoh:</Text> {order.client_note}</Text>
+          )}
         </View>
         <View style={{ flex: 1 }}>
           <Text style={st.receiptMetaLine}><Text style={st.receiptMetaLabel}>Sotuvchi:</Text> {RECEIPT_SELLER_NAME}</Text>
@@ -798,7 +802,12 @@ export default function Courier() {
                   <View key={`${item.item_id || item.product_id || idx}-${idx}`} style={st.modalItemRow}>
                     <View style={{ flex: 1 }}>
                       <Text style={st.modalItemName}>{item.name?.uz || item.name || "Mahsulot"}{item.variation ? ` • ${item.variation}` : ""}</Text>
-                      <Text style={st.modalItemMeta}>{item.qty} × {fmt(item.price || 0)}</Text>
+                      <Text style={st.modalItemMeta}>{item.qty}{String(item.sale_mode || item.unit_type || "") === "kg" ? " kg" : ""} × {fmt(item.price || 0)}</Text>
+                      {!!item.extra_qty && Number(item.extra_client_price) > 0 && (
+                        <Text style={[st.modalItemMeta, { color: C.brandDark, fontWeight: "800" }]}>
+                          + Ortiqcha {item.extra_qty} kg: {fmt(item.extra_client_price)}
+                        </Text>
+                      )}
                     </View>
                     <Pressable onPress={() => toggleItemReturn(idx)} style={[st.toggleReturnBtn, returned && st.toggleReturnBtnActive]}>
                       <Ionicons name={returned ? "close" : "checkmark"} size={16} color={returned ? "#fff" : C.success} />

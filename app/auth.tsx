@@ -34,9 +34,8 @@ export default function Auth() {
   const [code, setCode] = useState("");
   const [demoCode, setDemoCode] = useState("");
   const [exists, setExists] = useState(true);
-  const [firstName, setFirstName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [addressText, setAddressText] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [optionalNote, setOptionalNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
@@ -56,21 +55,25 @@ export default function Auth() {
 
   const verify = async () => {
     setErr("");
-    if (!exists && !firstName.trim()) {
-      setErr(t("firstName") + "?");
+    if (!exists && !fullName.trim()) {
+      setErr("Ism va familiyani yozing");
       return;
     }
     setLoading(true);
     try {
+      const parts = fullName.trim().split(/\s+/).filter(Boolean);
+      const first_name = parts[0] || "Foydalanuvchi";
+      const last_name = parts.slice(1).join(" ") || "";
       const res = await api("/auth/verify-otp", {
         method: "POST",
         body: {
           phone,
           code,
-          first_name: firstName,
-          last_name: lastName,
+          first_name,
+          last_name,
           language: lang,
-          address_text: addressText.trim() || null,
+          address_text: optionalNote.trim() || null,
+          profile_note: optionalNote.trim() || null,
         },
       });
       await login(res.token, res.user);
@@ -190,32 +193,24 @@ export default function Auth() {
                   {!exists && (
                     <>
                       <TextInput
-                        testID="auth-firstname-input"
+                        testID="auth-fullname-input"
                         style={st.input}
-                        value={firstName}
-                        onChangeText={setFirstName}
-                        placeholder={t("firstName")}
+                        value={fullName}
+                        onChangeText={setFullName}
+                        placeholder="Ism Familiya"
                         placeholderTextColor={C.muted}
+                        autoCapitalize="words"
                         onFocus={() => scrollToInput(220)}
-                      />  
+                      />
                       <TextInput
-                        testID="auth-lastname-input"
+                        testID="auth-optional-input"
                         style={st.input}
-                        value={lastName}
-                        onChangeText={setLastName}
-                        placeholder={t("lastName")}
+                        value={optionalNote}
+                        onChangeText={setOptionalNote}
+                        placeholder="Ixtiyoriy (masalan: qo'shimcha izoh)"
                         placeholderTextColor={C.muted}
                         onFocus={() => scrollToInput(280)}
                       />
-                      {/* <TextInput
-                        testID="auth-address-input"
-                        style={st.input}
-                        value={addressText}
-                        onChangeText={setAddressText}
-                        placeholder="Ixtiyoriy: taxminiy manzil"
-                        placeholderTextColor={C.muted}
-                        onFocus={() => scrollToInput(340)}
-                      /> */}
                     </>
                   )}
                   {!!err && (
