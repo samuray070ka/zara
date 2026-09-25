@@ -11,6 +11,7 @@ import {
   Platform,
   Keyboard,
   TouchableWithoutFeedback,
+  Linking,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -38,17 +39,41 @@ export default function Auth() {
   const [optionalNote, setOptionalNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [otpHint, setOtpHint] = useState("");
+  const [botLink, setBotLink] = useState("");
 
   const sendOtp = async () => {
     setErr("");
+    setOtpHint("");
+    setBotLink("");
     setLoading(true);
     try {
       const res = await api("/auth/send-otp", { method: "POST", body: { phone } });
-      setDemoCode(res.demo_code);
-      setExists(res.exists);
+      setDemoCode(res.demo_code || "");
+      setExists(!!res.exists);
+      const link = res.bot_link || "";
+      setBotLink(link);
+
+      if (res.need_start && link) {
+        setOtpHint("Telegram ochildi. «Start» tugmasini bosing — kod botga keladi, keyin shu yerga yozing.");
+        try {
+          await Linking.openURL(link);
+        } catch {
+          setOtpHint("Telegram ochilmadi. Pastdagi tugma orqali oching va Start bosing.");
+        }
+      } else if (res.channel === "telegram") {
+        setOtpHint("Kod Telegramga yuborildi. Telegramdan olib shu yerga yozing.");
+      } else if (res.demo_code) {
+        setOtpHint("Demo rejim: kod pastda ko'rsatilgan.");
+      } else {
+        setOtpHint(res.message || "Kod yuborildi");
+      }
       setStep(2);
     } catch (e: any) {
-      setErr(e.message);
+      const msg = e?.message || "Xatolik";
+      setErr(msg);
+      const m = String(msg).match(/https?:\/\/t\.me\/\S+/);
+      if (m) setBotLink(m[0]);
     }
     setLoading(false);
   };
@@ -155,6 +180,11 @@ export default function Auth() {
                       {err}
                     </Text>
                   )}
+                  {!!botLink && !!err && (
+                    <Pressable onPress={() => Linking.openURL(botLink)} style={{ marginBottom: S.md }}>
+                      <Text style={[st.link, { textAlign: "center" }]}>Telegram botni ochish →</Text>
+                    </Pressable>
+                  )}
                   <Pressable
                     testID="auth-send-otp-button"
                     style={[st.btn, loading && { opacity: 0.6 }]}
@@ -168,15 +198,34 @@ export default function Auth() {
                 <>
                   <Text style={st.title}>{t("enterCode")}</Text>
                   <Text style={st.sub}>{phone}</Text>
-                  <View style={st.demoBox}>
-                    <Ionicons name="information-circle" size={18} color={C.onBrandSoft} />
-                    <Text style={st.demoTxt}>
-                      DEMO rejim — sizning kodingiz:{" "}
-                      <Text testID="auth-demo-code" style={{ fontWeight: "900" }}>
-                        {demoCode}
+                  {!!otpHint && (
+                    <View style={st.demoBox}>
+                      <Ionicons name="paper-plane" size={18} color={C.onBrandSoft} />
+                      <Text style={st.demoTxt}>{otpHint}</Text>
+                    </View>
+                  )}
+                  {!!demoCode && (
+                    <View style={st.demoBox}>
+                      <Ionicons name="information-circle" size={18} color={C.onBrandSoft} />
+                      <Text style={st.demoTxt}>
+                        DEMO kod:{" "}
+                        <Text testID="auth-demo-code" style={{ fontWeight: "900" }}>
+                          {demoCode}
+                        </Text>
                       </Text>
-                    </Text>
-                  </View>
+                    </View>
+                  )}
+                  {!!botLink && !demoCode && (
+                    <Pressable
+                      onPress={() => Linking.openURL(botLink)}
+                      style={[st.demoBox, { borderColor: C.brandDark }]}
+                    >
+                      <Ionicons name="logo-telegram" size={18} color={C.brandDark} />
+                      <Text style={[st.demoTxt, { color: C.brandDark, fontWeight: "800" }]}>
+                        Telegramni ochish — Start bosing
+                      </Text>
+                    </Pressable>
+                  )}
                   <TextInput
                     testID="auth-code-input"
                     style={[st.input, { textAlign: "center", letterSpacing: 8, fontSize: 22, fontWeight: "800" }]}
