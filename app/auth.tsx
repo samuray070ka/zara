@@ -42,6 +42,49 @@ export default function Auth() {
   const [otpHint, setOtpHint] = useState("");
   const [botLink, setBotLink] = useState("");
 
+
+  /** Telegram / Plus / boshqa klient — tizim qaysi app bog'langan bo'lsa o'sha (yoki tanlash oynasi) */
+  const openTelegramBot = async (httpsLink: string) => {
+    if (!httpsLink) return;
+    let username = "";
+    let startPayload = "";
+    try {
+      const raw = httpsLink.replace(/^https?:\/\/t\.me\//i, "");
+      const [pathPart, queryPart] = raw.split("?");
+      username = (pathPart || "").split("/")[0].replace("@", "");
+      if (queryPart) {
+        const m = queryPart.match(/(?:^|&)start=([^&]+)/);
+        if (m) startPayload = decodeURIComponent(m[1]);
+      }
+    } catch {
+      /* ignore */
+    }
+
+    // 1) Universal deep link — Telegram, Plus, X va boshqalar tg:// ni ushlashi mumkin
+    if (username) {
+      const tgUrl = startPayload
+        ? `tg://resolve?domain=${encodeURIComponent(username)}&start=${encodeURIComponent(startPayload)}`
+        : `tg://resolve?domain=${encodeURIComponent(username)}`;
+      try {
+        const can = await Linking.canOpenURL(tgUrl);
+        if (can) {
+          await Linking.openURL(tgUrl);
+          return;
+        }
+      } catch {
+        try {
+          await Linking.openURL(tgUrl);
+          return;
+        } catch {
+          /* fallback below */
+        }
+      }
+    }
+
+    // 2) https://t.me/... — brauzer yoki default Telegram
+    await Linking.openURL(httpsLink);
+  };
+
   const sendOtp = async () => {
     setErr("");
     setOtpHint("");
@@ -55,9 +98,9 @@ export default function Auth() {
       setBotLink(link);
 
       if (res.need_start && link) {
-        setOtpHint("Telegram ochildi. «Start» tugmasini bosing — kod botga keladi, keyin shu yerga yozing.");
+        setOtpHint("Telegram ochiladi (oddiy / Plus / boshqa). «Start» bosing — kod botga keladi.");
         try {
-          await Linking.openURL(link);
+          await openTelegramBot(link);
         } catch {
           setOtpHint("Telegram ochilmadi. Pastdagi tugma orqali oching va Start bosing.");
         }
@@ -181,8 +224,8 @@ export default function Auth() {
                     </Text>
                   )}
                   {!!botLink && !!err && (
-                    <Pressable onPress={() => Linking.openURL(botLink)} style={{ marginBottom: S.md }}>
-                      <Text style={[st.link, { textAlign: "center" }]}>Telegram botni ochish →</Text>
+                    <Pressable onPress={() => openTelegramBot(botLink)} style={{ marginBottom: S.md }}>
+                      <Text style={[st.link, { textAlign: "center" }]}>Telegram ochish →</Text>
                     </Pressable>
                   )}
                   <Pressable
@@ -217,12 +260,12 @@ export default function Auth() {
                   )}
                   {!!botLink && !demoCode && (
                     <Pressable
-                      onPress={() => Linking.openURL(botLink)}
+                      onPress={() => openTelegramBot(botLink)}
                       style={[st.demoBox, { borderColor: C.brandDark }]}
                     >
                       <Ionicons name="logo-telegram" size={18} color={C.brandDark} />
                       <Text style={[st.demoTxt, { color: C.brandDark, fontWeight: "800" }]}>
-                        Telegramni ochish — Start bosing
+                        Telegram ochish (Plus ham) — Start
                       </Text>
                     </Pressable>
                   )}
