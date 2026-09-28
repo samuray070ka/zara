@@ -85,10 +85,23 @@ export default function Auth() {
     await Linking.openURL(httpsLink);
   };
 
+
+  const isValidUzPhone = (raw: string) => {
+    const digits = String(raw || "").replace(/\D/g, "");
+    if (!digits.startsWith("998") || digits.length !== 12) return false;
+    const rest = digits.slice(5);
+    if (rest === "0000000" || new Set(rest).size === 1) return false;
+    return true;
+  };
+
   const sendOtp = async () => {
     setErr("");
     setOtpHint("");
     setBotLink("");
+    if (!isValidUzPhone(phone)) {
+      setErr("Telefon raqam noto'g'ri. Format: +998 XX XXX XX XX");
+      return;
+    }
     setLoading(true);
     try {
       const res = await api("/auth/send-otp", { method: "POST", body: { phone } });

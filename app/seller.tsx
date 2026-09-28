@@ -14,7 +14,7 @@ import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import Animated, { FadeInDown } from "react-native-reanimated";
+import Animated, { FadeInDown, useSharedValue, useAnimatedStyle, withSequence, withTiming, withRepeat } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { C, S, R, fmt } from "@/src/lib/theme";
@@ -23,6 +23,7 @@ import { api } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
 import { getCurrentLocation } from "@/src/lib/geo";
 import { searchByImage, searchOwnProductsByImage, pickerAssetToUri } from "@/src/lib/imageSearch";
+import zarramarketLogo from "../assets/images/zarramarket-logo.png";
 
 const TABS = [
   { k: "stats", l: "Statistika", icon: "stats-chart" },
@@ -55,6 +56,20 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: "Bekor",
   seller_rejected: "Sotuvchi rad etdi",
 };
+
+/** Status matn rangi — background yo'q, faqat rang */
+function statusAccent(status: string): string {
+  switch (status) {
+    case "new": return "#B45309";
+    case "confirmed": return "#047857";
+    case "packing": return "#1D4ED8";
+    case "courier": return "#6D28D9";
+    case "delivered": return "#059669";
+    case "cancelled":
+    case "seller_rejected": return "#DC2626";
+    default: return "#64748B";
+  }
+}
 
 const MAX_IMAGES = 5;
 
@@ -115,6 +130,7 @@ export default function Seller() {
   const [uploading, setUploading] = useState(false);
   const [shopLocLoading, setShopLocLoading] = useState(false);
   const [savingProduct, setSavingProduct] = useState(false);
+  const [payFlashId, setPayFlashId] = useState<string | null>(null);
   const [orderBusy, setOrderBusy] = useState<string | null>(null);
   const [rejectAllOrderId, setRejectAllOrderId] = useState<string | null>(null);
   const [rejectPhrase, setRejectPhrase] = useState("");
@@ -566,9 +582,11 @@ export default function Seller() {
     const key = `${oid}:payment_received`;
     if (orderBusy === key) return;
     setOrderBusy(key);
+    setPayFlashId(oid);
     try {
       await api(`/seller/orders/${oid}/payment-received`, { method: "POST", body: {} });
       setMsg("Pul olganingiz tasdiqlandi ✓");
+      setTimeout(() => setPayFlashId(null), 1200);
       load();
     } catch (e: any) {
       try {
@@ -577,8 +595,10 @@ export default function Seller() {
           body: { action: "payment_received" },
         });
         setMsg("Pul olganingiz tasdiqlandi ✓");
+        setTimeout(() => setPayFlashId(null), 1200);
         load();
       } catch (e2: any) {
+        setPayFlashId(null);
         setMsg(e2?.message || e?.message || "Tasdiqlab bo'lmadi");
       }
     } finally {
@@ -829,9 +849,10 @@ export default function Seller() {
   return (
     <View style={[st.root, { paddingTop: insets.top }]}>
       <LinearGradient colors={[C.inverse, "#064E3B"]} style={st.header}>
+        <Image source={zarramarketLogo} style={st.headerLogo} contentFit="contain" />
         <View style={{ flex: 1 }}>
-          <Text style={st.headerTitle}>{t("sellerPanel")}</Text>
-          <Text style={st.headerSub}>{user?.seller_info?.shop_name || "Do'kon"}</Text>
+          <Text style={st.headerTitle}>ZarraMarket</Text>
+          <Text style={st.headerSub}>{user?.seller_info?.shop_name || t("sellerPanel")}</Text>
         </View>
         <Pressable onPress={() => setConfirmLogout(true)} style={st.logoutBtn}>
           <Ionicons name="log-out-outline" size={20} color="#fff" />
@@ -1323,11 +1344,9 @@ export default function Seller() {
                     <Text style={{ fontWeight: "900", color: C.onSurface, fontSize: 15 }}>
                       {o.number}
                     </Text>
-                    <View style={[st.badge, { backgroundColor: "#FEF3C7" }]}>
-                      <Text style={[st.badgeTxt, { color: "#B45309" }]}>
-                        {STATUS_LABEL[o.status] || "Yangi"}
-                      </Text>
-                    </View>
+                    <Text style={[st.statusPlain, { color: statusAccent(o.status || "new") }]}>
+                      {STATUS_LABEL[o.status] || "Yangi"}
+                    </Text>
                   </View>
                   <Text style={st.orderMeta}>
                     {o.delivery_method === "pickup"
@@ -1490,11 +1509,9 @@ export default function Seller() {
                         <Text style={{ fontWeight: "900", color: C.onSurface, fontSize: 15 }}>
                           {o.number}
                         </Text>
-                        <View style={[st.badge, { backgroundColor: C.tertiary }]}>
-                          <Text style={[st.badgeTxt, { color: C.onTertiary }]}>
-                            {STATUS_LABEL[o.status]}
-                          </Text>
-                        </View>
+                        <Text style={[st.statusPlain, { color: statusAccent(o.status) }]}>
+                          {STATUS_LABEL[o.status]}
+                        </Text>
                       </View>
                       <Text style={st.orderMeta}>
                         {o.delivery_method === "pickup"
@@ -1541,7 +1558,7 @@ export default function Seller() {
                               <View style={st.kgExtraBox}>
                                 <Text style={st.kgExtraBoxTitle}>Ortiqcha og'irlik (kg)</Text>
                                 <Text style={st.kgExtraBoxHint}>
-                                  Buyurtmadan ortiq chiqsa — kg va narxni yozing
+                                  Buyurtmadan ortiq chiqsa — kg va narxni yozing. Moderator foizi avtomatik qo'shiladi.
                                 </Text>
                                 <View style={st.kgExtraRow}>
                                   <View style={{ flex: 1, minWidth: 100 }}>
@@ -1624,10 +1641,16 @@ export default function Seller() {
                           </View>
                           {!paymentConfirmed && (
                             <Pressable
-                              style={[st.actBtn, { backgroundColor: C.success, marginTop: 8 }]}
+                              style={[
+                                st.actBtn,
+                                { backgroundColor: C.success, marginTop: 8 },
+                                payFlashId === o.id && st.payBtnFlash,
+                              ]}
                               onPress={() => confirmPaymentReceived(o.id)}
                             >
-                              <Text style={st.actTxt}>Pulni oldim</Text>
+                              <Text style={st.actTxt}>
+                                {payFlashId === o.id ? "✓ Tasdiqlandi" : "Pulni oldim"}
+                              </Text>
                             </Pressable>
                           )}
                         </View>
@@ -2147,6 +2170,9 @@ const st = StyleSheet.create({
   prodMeta: { fontSize: 12, color: C.muted, marginTop: 2 },
   badge: { borderRadius: R.pill, paddingHorizontal: 8, paddingVertical: 3 },
   badgeTxt: { fontSize: 10, fontWeight: "800" },
+  statusPlain: { fontSize: 12, fontWeight: "800", backgroundColor: "transparent" },
+  headerLogo: { width: 40, height: 40, borderRadius: 10, marginRight: 10, backgroundColor: "#fff" },
+  payBtnFlash: { backgroundColor: "#059669", transform: [{ scale: 1.04 }], shadowColor: "#10B981", shadowOpacity: 0.55, shadowRadius: 12, elevation: 6 },
   prodActionsPanel: {
     flexDirection: "row",
     gap: S.sm,

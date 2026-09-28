@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "frontend",
-    "slug": "frontend",
+    "name": "ZarraMarket",
+    "slug": "zarramarket",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "frontend",
+    "icon": "./assets/images/zarramarket-logo.png",
+    "scheme": "zarramarket",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
@@ -14,8 +14,8 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#000000"
+        "foregroundImage": "./assets/images/zarramarket-logo.png",
+        "backgroundColor": "#064E3B"
       },
       "edgeToEdgeEnabled": true,
       "package": "com.emergent.couriers.s8qani"
@@ -23,7 +23,7 @@
     "web": {
       "bundler": "metro",
       "output": "single",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./assets/images/zarramarket-logo.png"
     },
     "plugins": [
       "expo-router",
