@@ -1,4 +1,4 @@
-const BASE = "http://127.0.0.1:8000";
+const BASE = "https://last-zara-back.fly.dev";
 
 let _token: string | null = null;
 export const setToken = (t: string | null) => {
