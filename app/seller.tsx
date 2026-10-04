@@ -23,7 +23,7 @@ import { api } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
 import { getCurrentLocation } from "@/src/lib/geo";
 import { searchByImage, searchOwnProductsByImage, pickerAssetToUri } from "@/src/lib/imageSearch";
-import zarramarketLogo from "../assets/images/zarramarket-logo.png";
+import zarramarketLogo from "../../assets/images/zarramarket-logo.png";
 
 const TABS = [
   { k: "stats", l: "Statistika", icon: "stats-chart" },
@@ -943,6 +943,30 @@ export default function Seller() {
 
             {stats && (
               <>
+                {/* Olishim kerak — Pulni oldim bosilganda kamayadi */}
+                <View style={st.collectCard}>
+                  <View style={st.collectTop}>
+                    <View style={st.collectIconWrap}>
+                      <Ionicons name="wallet" size={22} color="#B45309" />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={st.collectTitle}>Olishim kerak</Text>
+                      <Text style={st.collectHint}>
+                        {(stats.to_collect_count || 0) > 0
+                          ? `${stats.to_collect_count} ta yetkazilgan buyurtma — «Pulni oldim» bosilmagan`
+                          : "Hozircha olinmagan pul yo'q"}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={st.collectAmount}>{fmt(stats.to_collect || 0)}</Text>
+                  {(stats.collected_today || 0) > 0 && (
+                    <Text style={st.collectSub}>
+                      Bugun olingan: {fmt(stats.collected_today || 0)}
+                      {(stats.collected_today_count || 0) > 0 ? ` (${stats.collected_today_count} ta)` : ""}
+                    </Text>
+                  )}
+                </View>
+
                 <View style={st.statGrid}>
                   {[
                     { l: "Bugungi buyurtmalar", v: String(stats.today_orders || 0), icon: "receipt" },
@@ -1882,6 +1906,23 @@ const st = StyleSheet.create({
     alignItems: "flex-start",
   },
   infoNoteTxt: { color: C.onBrandSoft, fontSize: 12, flex: 1, lineHeight: 17 },
+  collectCard: {
+    backgroundColor: "#FFFBEB",
+    borderRadius: R.lg,
+    borderWidth: 1.5,
+    borderColor: "#F59E0B",
+    padding: S.md,
+    marginBottom: S.md,
+  },
+  collectTop: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 8 },
+  collectIconWrap: {
+    width: 40, height: 40, borderRadius: 12,
+    backgroundColor: "#FEF3C7", alignItems: "center", justifyContent: "center",
+  },
+  collectTitle: { fontSize: 13, fontWeight: "900", color: "#92400E" },
+  collectHint: { fontSize: 11, color: "#B45309", marginTop: 2, fontWeight: "600" },
+  collectAmount: { fontSize: 26, fontWeight: "900", color: "#B45309", letterSpacing: 0.3 },
+  collectSub: { fontSize: 12, fontWeight: "700", color: "#059669", marginTop: 6 },
   statGrid: { flexDirection: "row", flexWrap: "wrap", gap: S.md },
   statCard: {
     flexBasis: "30%",
