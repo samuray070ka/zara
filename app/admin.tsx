@@ -16,7 +16,7 @@ import { searchByImage, pickerAssetToUri } from "@/src/lib/imageSearch";
 const SECTIONS = [
   { k: "dashboard", l: "Dashboard", icon: "speedometer" },
   { k: "orders", l: "Buyurtmalar", icon: "receipt" },
-  // { k: "rejected_orders", l: "Rad etilganlar", icon: "alert-circle" },
+  { k: "rejected_orders", l: "Rad etilganlar", icon: "alert-circle" },
   { k: "products", l: "Mahsulotlar", icon: "cube" },
   { k: "sellers", l: "Sotuvchilar", icon: "storefront" },
   { k: "clients", l: "Mijozlar", icon: "people" },
@@ -774,7 +774,7 @@ const visibleProducts = useMemo(() => {
         ))
         )}
 
-        {/* {sec === "rejected_orders" && (
+        {sec === "rejected_orders" && (
           loadingSec === "rejected_orders" ? (
             <SectionLoader label="Rad etilgan buyurtmalar yuklanmoqda..." />
           ) : (
@@ -877,7 +877,7 @@ const visibleProducts = useMemo(() => {
             ))}
           </>
           )
-        )} */}
+        )}
 
         {sec === "products" && (
           <>
@@ -1071,8 +1071,8 @@ const visibleProducts = useMemo(() => {
               {expanded && (
                 <View style={{ marginTop: S.sm }}>
                   <View style={st.courierStatGrid}>
-                    <View style={st.courierStatBox}><Text style={st.courierStatVal}>{summary.today_orders || 0}</Text><Text style={st.courierStatLabel}>Bugungi buyurtmalar</Text></View>
-                    <View style={st.courierStatBox}><Text style={st.courierStatVal}>{fmt(summary.today_amount || 0)}</Text><Text style={st.courierStatLabel}>Bugungi summa</Text></View>
+                    <View style={st.courierStatBox}><Text style={st.courierStatVal}>{summary.today_orders || 0}</Text><Text style={st.courierStatLabel}>Buyurtmalar</Text></View>
+                    <View style={st.courierStatBox}><Text style={st.courierStatVal}>{fmt(summary.today_amount || 0)}</Text><Text style={st.courierStatLabel}>Jami summa</Text></View>
                     <View style={st.courierStatBox}><Text style={st.courierStatVal}>{summary.today_returns_count || 0}</Text><Text style={st.courierStatLabel}>Qaytarilganlar</Text></View>
                     <View style={st.courierStatBox}><Text style={st.courierStatVal}>{fmt(summary.today_returns_amount || 0)}</Text><Text style={st.courierStatLabel}>Qaytgan summa</Text></View>
                   </View>
@@ -1082,8 +1082,8 @@ const visibleProducts = useMemo(() => {
                     </Pressable>
                   </View>
                   {!!summary.stats_reset_at && <Text style={st.meta}>Oxirgi reset: {new Date(summary.stats_reset_at).toLocaleString()}</Text>}
-                  <Text style={st.sectionMiniTitle}>Bugungi buyurtmalar tarixi</Text>
-                  {(u.seller_today_orders || []).length === 0 && <Text style={st.meta}>Bugun buyurtma yo'q</Text>}
+                  <Text style={st.sectionMiniTitle}>Buyurtmalar tarixi (resetdan beri)</Text>
+                  {(u.seller_today_orders || []).length === 0 && <Text style={st.meta}>Buyurtma yo'q</Text>}
                   {(u.seller_today_orders || []).map((item: any) => (
                     <View key={item.id} style={st.detailBox}>
                       <Text style={st.detailTitle}>{item.number}</Text>
@@ -1496,8 +1496,8 @@ const visibleProducts = useMemo(() => {
               return list.map((p) => (
               <View key={p.id} style={st.card}>
                 <View style={st.rowBetween}>
-                  <Text style={st.bold} numberOfLines={1}>{ml(p.name, lang)}</Text>
-                  <Text style={st.meta}>{fmt(p.price)}</Text>
+                  <Text style={st.bold} numberOfLines={1}>{ml(p.name, lang)}{p.unit_type === "kg" || p.sale_mode === "kg" ? " · kg" : ""}</Text>
+                  <Text style={st.meta}>{fmt(p.price)}{p.unit_type === "kg" || p.sale_mode === "kg" ? " / kg" : ""}</Text>
                 </View>
                 {p.flash_active && <Text style={{ color: C.warning, fontWeight: "800", fontSize: 12 }}>⚡ Aktiv: {fmt(p.effective_price)}</Text>}
                 {flashForm.product_id === p.id ? (

@@ -19,23 +19,42 @@ type Ctx = {
   setQty: (product_id: string, variation: string | null | undefined, qty: number) => void;
   remove: (product_id: string, variation?: string | null) => void;
   clear: () => void;
+  updateImages: (map: Record<string, string>) => void;
   count: number;
   subtotal: number;
 };
 
 const CartContext = createContext<Ctx>({} as Ctx);
 
-/** localStorage quota uchun: katta base64 ni saqlamaymiz */
+/** localStorage: URL va thumb saqlanadi */
 function slimImage(img?: string | null): string {
   if (!img || typeof img !== "string") return "";
   const s = img.trim();
   if (!s) return "";
-  // URL — saqlaymiz
   if (s.startsWith("http://") || s.startsWith("https://")) return s;
-  // data-URI juda katta bo'lsa — tashlaymiz (quota)
-  if (s.startsWith("data:") && s.length > 8000) return "";
-  if (s.length > 8000) return "";
+  if (s.startsWith("data:") && s.length > 60000) return "";
+  if (!s.startsWith("data:") && s.length > 60000) return "";
   return s;
+}
+
+export function pickProductImage(p: any): string {
+  if (!p) return "";
+  const list: any[] = [];
+  if (Array.isArray(p.images)) list.push(...p.images);
+  for (const k of ["image", "preview_image", "thumbnail", "main_image", "photo"]) {
+    if (p[k]) list.push(p[k]);
+  }
+  for (const c of list) {
+    let s = "";
+    if (typeof c === "string") s = c.trim();
+    else if (c && typeof c === "object") s = String(c.url || c.src || c.uri || c.path || "").trim();
+    if (s.length > 8) {
+      const out = slimImage(s);
+      if (out) return out;
+      if (s.startsWith("http")) return s;
+    }
+  }
+  return "";
 }
 
 function slimCartItem(item: CartItem): CartItem {
@@ -110,11 +129,22 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const clear = useCallback(() => setItems([]), []);
 
+  const updateImages = useCallback((map: Record<string, string>) => {
+    if (!map || !Object.keys(map).length) return;
+    setItems((prev) =>
+      prev.map((i) => {
+        if (i.image) return i;
+        const img = map[i.product_id];
+        return img ? { ...i, image: slimImage(img) } : i;
+      })
+    );
+  }, []);
+
   const count = items.reduce((s, i) => s + i.qty, 0);
   const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
 
   return (
-    <CartContext.Provider value={{ items, add, setQty, remove, clear, count, subtotal }}>
+    <CartContext.Provider value={{ items, add, setQty, remove, clear, updateImages, count, subtotal }}>
       {children}
     </CartContext.Provider>
   );

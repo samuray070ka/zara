@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, {useState, useEffect} from "react";
 import { View, Text, Pressable, StyleSheet, ScrollView, TextInput } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
@@ -15,7 +15,37 @@ export default function Cart() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { t, lang } = useLang();
-  const { items, setQty, remove, subtotal } = useCart();
+  const { items, setQty, remove, subtotal, updateImages} = useCart();
+
+  // Savatda rasm yo'qlarini product API dan to'ldirish
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const missing = (items || []).filter((it: any) => !it.image && it.product_id);
+      if (!missing.length || !updateImages) return;
+      const ids = Array.from(new Set(missing.map((x: any) => x.product_id))).slice(0, 40);
+      const found: Record<string, string> = {};
+      await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const p = await api(`/products/${id}`);
+            const raw =
+              (Array.isArray(p?.images) && p.images.find((x: any) => typeof x === "string" && String(x).length > 8)) ||
+              p?.image ||
+              p?.preview_image ||
+              "";
+            if (typeof raw === "string" && raw.trim().length > 8) {
+              const s = raw.trim();
+              if (s.startsWith("http") || s.length < 60000) found[id as string] = s;
+            }
+          } catch {}
+        })
+      );
+      if (!cancelled && Object.keys(found).length) updateImages(found);
+    })();
+    return () => { cancelled = true; };
+  }, [items, updateImages]);
+
   const { token } = useAuth();
   const [promo, setPromo] = useState("");
   const [applied, setApplied] = useState<any>(null);
@@ -80,7 +110,13 @@ export default function Cart() {
             </View>
             {list.map((i) => (
               <View key={`${i.product_id}|${i.variation}`} style={st.itemRow}>
-                <Image source={{ uri: i.image }} style={st.itemImg} contentFit="cover" />
+                {i.image ? (
+                  <Image source={{ uri: i.image }} style={st.itemImg} contentFit="cover" />
+                ) : (
+                  <View style={[st.itemImg, { backgroundColor: "#E5E7EB", alignItems: "center", justifyContent: "center" }]}>
+                    <Ionicons name="image-outline" size={22} color="#9CA3AF" />
+                  </View>
+                )}
                 <View style={{ flex: 1 }}>
                   <Text style={st.itemName} numberOfLines={2}>
                     {ml(i.name, lang)}
