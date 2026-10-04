@@ -23,7 +23,7 @@ import { api } from "@/src/lib/api";
 import { useAuth } from "@/src/lib/auth";
 import { getCurrentLocation } from "@/src/lib/geo";
 import { searchByImage, searchOwnProductsByImage, pickerAssetToUri } from "@/src/lib/imageSearch";
-import zarramarketLogo from "../../assets/images/zarramarket-logo.png";
+import zarramarketLogo from "../assets/images/zarramarket-logo.png";
 
 const TABS = [
   { k: "stats", l: "Statistika", icon: "stats-chart" },
