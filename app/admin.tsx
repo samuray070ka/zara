@@ -1070,6 +1070,26 @@ const visibleProducts = useMemo(() => {
               </View>
               {expanded && (
                 <View style={{ marginTop: S.sm }}>
+                  <View style={{
+                    backgroundColor: "#FFFBEB",
+                    borderRadius: 12,
+                    borderWidth: 1.5,
+                    borderColor: "#F59E0B",
+                    padding: 12,
+                    marginBottom: 10,
+                  }}>
+                    <Text style={{ fontSize: 12, fontWeight: "800", color: "#92400E" }}>
+                      Berilishi kerak (olinmagan)
+                    </Text>
+                    <Text style={{ fontSize: 22, fontWeight: "900", color: "#B45309", marginTop: 4 }}>
+                      {fmt(summary.to_collect || 0)}
+                    </Text>
+                    <Text style={{ fontSize: 11, color: "#B45309", marginTop: 2, fontWeight: "600" }}>
+                      {(summary.to_collect_count || 0) > 0
+                        ? `${summary.to_collect_count} ta yetkazilgan — sotuvchi «Pulni oldim» bosmagan`
+                        : "Olinmagan pul yo'q"}
+                    </Text>
+                  </View>
                   <View style={st.courierStatGrid}>
                     <View style={st.courierStatBox}><Text style={st.courierStatVal}>{summary.today_orders || 0}</Text><Text style={st.courierStatLabel}>Buyurtmalar</Text></View>
                     <View style={st.courierStatBox}><Text style={st.courierStatVal}>{fmt(summary.today_amount || 0)}</Text><Text style={st.courierStatLabel}>Jami summa</Text></View>
