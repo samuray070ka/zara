@@ -64,46 +64,66 @@ export default function Search() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    if (debounce.current) clearTimeout(debounce.current);
-    if (!q.trim()) {
-      setSuggestions([]);
-      return;
-    }
-    debounce.current = setTimeout(() => {
-      api(`/search/suggest?q=${encodeURIComponent(q)}`)
-        .then((r) => setSuggestions(r.suggestions || []))
-        .catch(() => {});
-    }, 300);
-  }, [q]);
-
-  const doSearch = async (term?: string) => {
-    const query = term ?? q;
-    if (!query.trim()) return;
+  const doSearch = async (term?: string, opts?: { silentHist?: boolean }) => {
+    const query = String(term ?? q ?? "").trim();
+    if (!query) return;
+    // rasm rejimini matn qidiruvga o'tganda tozalash
     setImageUri(null);
     setImageError("");
     setLoading(true);
     setSearched(true);
-    if (term) setQ(term);
-    const newHist = [query, ...history.filter((h) => h !== query)].slice(0, 8);
-    setHistory(newHist);
-    storage.setItem("search_history", JSON.stringify(newHist));
+    if (term != null) setQ(String(term));
+    if (!opts?.silentHist) {
+      const newHist = [query, ...history.filter((h) => h !== query)].slice(0, 8);
+      setHistory(newHist);
+      storage.setItem("search_history", JSON.stringify(newHist)).catch(() => {});
+    }
     let url = `/products?search=${encodeURIComponent(query)}&sort=${sort}&limit=40`;
     if (discountOnly) url += "&discount=true";
     if (inStock) url += "&in_stock=true";
-    if (minP) url += `&min_price=${minP}`;
-    if (maxP) url += `&max_price=${maxP}`;
+    if (minP) url += `&min_price=${encodeURIComponent(minP)}`;
+    if (maxP) url += `&max_price=${encodeURIComponent(maxP)}`;
     try {
       const r = await api(url);
-      setResults(Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : []);
-    } catch {
+      const items = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
+      setResults(items);
+    } catch (e) {
+      console.warn("text search failed", e);
       setResults([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
+  // Takliflar + matn yozganda avtomatik qidiruv (rasm rejimiga tegilmaydi)
   useEffect(() => {
-    if (searched && !imageUri) doSearch();
+    if (debounce.current) clearTimeout(debounce.current);
+    const term = q.trim();
+    if (!term) {
+      setSuggestions([]);
+      if (!imageUri) {
+        setSearched(false);
+        setResults([]);
+      }
+      return;
+    }
+    if (imageUri) return; // rasm qidiruvi aktiv — matn avto-qidiruv ishlamasin
+    debounce.current = setTimeout(() => {
+      api(`/search/suggest?q=${encodeURIComponent(term)}`)
+        .then((r) => setSuggestions(r.suggestions || []))
+        .catch(() => {});
+      if (term.length >= 2) {
+        doSearch(term, { silentHist: true });
+      }
+    }, 350);
+    return () => {
+      if (debounce.current) clearTimeout(debounce.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q]);
+
+  useEffect(() => {
+    if (searched && !imageUri && q.trim()) doSearch(q, { silentHist: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sort, discountOnly, inStock]);
 
@@ -231,6 +251,7 @@ export default function Search() {
             placeholderTextColor={C.muted}
             autoFocus={params.imageMode !== "1"}
             returnKeyType="search"
+            blurOnSubmit
             onSubmitEditing={() => doSearch()}
           />
           {!!q && (
@@ -247,6 +268,14 @@ export default function Search() {
               <Ionicons name="close-circle" size={18} color={C.muted} />
             </Pressable>
           )}
+          <Pressable
+            testID="search-submit-button"
+            onPress={() => doSearch()}
+            style={{ paddingHorizontal: 6, paddingVertical: 4 }}
+            hitSlop={8}
+          >
+            <Ionicons name="arrow-forward-circle" size={22} color={C.brandDark} />
+          </Pressable>
         </View>
         <Pressable
           testID="search-image-button"
