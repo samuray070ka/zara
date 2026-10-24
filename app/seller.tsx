@@ -20,6 +20,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { C, S, R, fmt } from "@/src/lib/theme";
 import { useLang, ml } from "@/src/lib/i18n";
 import { api } from "@/src/lib/api";
+import { storage } from "@/src/utils/storage";
 import { useAuth } from "@/src/lib/auth";
 import { getCurrentLocation } from "@/src/lib/geo";
 import { searchByImage, searchOwnProductsByImage, pickerAssetToUri } from "@/src/lib/imageSearch";
@@ -108,6 +109,85 @@ const emptyForm = () => ({
   unit_type: "piece" as "piece" | "kg",
 });
 
+
+/** Sotuvchi mahsulotlari 100+ — backend limitsiz front yechim */
+async function loadAllSellerProducts(sellerId?: string | null): Promise<any[]> {
+  const seen = new Set<string>();
+  const out: any[] = [];
+  const push = (list: any[]) => {
+    for (const p of list || []) {
+      const id = String(p?.id || "");
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      out.push(p);
+    }
+  };
+
+  // 1) asosiy endpoint (odatda 100 ta)
+  try {
+    const main = await api("/seller/products");
+    push(Array.isArray(main) ? main : []);
+  } catch {}
+
+  // 2) skip/limit so'rov (agar server qabul qilsa — qo'shimcha sahifalar)
+  for (let skip = 100; skip < 2000; skip += 100) {
+    try {
+      const chunk = await api(`/seller/products?skip=${skip}&limit=100`);
+      const list = Array.isArray(chunk) ? chunk : [];
+      if (!list.length) break;
+      const before = out.length;
+      push(list);
+      if (out.length === before || list.length < 100) break;
+    } catch {
+      break;
+    }
+  }
+
+  // 3) ochiq /products?seller_id= — tasdiqlanganlar, skip bilan
+  if (sellerId) {
+    for (let skip = 0; skip < 2000; skip += 50) {
+      try {
+        const r = await api(
+          `/products?seller_id=${encodeURIComponent(sellerId)}&sort=new&limit=50&skip=${skip}`
+        );
+        const list = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
+        if (!list.length) break;
+        push(list);
+        if (list.length < 50) break;
+      } catch {
+        break;
+      }
+    }
+  }
+
+  // 4) lokal kesh (qo'shilgan/tahrirlangan mahsulotlar saqlanadi)
+  try {
+    const key = `seller_products_extra_${sellerId || "me"}`;
+    const raw = await storage.getItem(key, "[]");
+    const cached = JSON.parse((raw as string) || "[]");
+    if (Array.isArray(cached)) push(cached);
+  } catch {}
+
+  return out;
+}
+
+async function cacheSellerProduct(sellerId: string | null | undefined, product: any) {
+  if (!product?.id) return;
+  try {
+    const key = `seller_products_extra_${sellerId || "me"}`;
+    const raw = await storage.getItem(key, "[]");
+    let arr: any[] = [];
+    try {
+      arr = JSON.parse((raw as string) || "[]");
+    } catch {
+      arr = [];
+    }
+    if (!Array.isArray(arr)) arr = [];
+    arr = [product, ...arr.filter((x) => x?.id !== product.id)].slice(0, 2000);
+    await storage.setItem(key, JSON.stringify(arr));
+  } catch {}
+}
+
 export default function Seller() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -171,7 +251,7 @@ export default function Seller() {
     try {
       await Promise.all([
         api("/seller/stats").then((st) => st && setStats(st)).catch(() => {}),
-        api("/seller/products")
+        loadAllSellerProducts(user?.id)
           .then((pr) => setProducts(Array.isArray(pr) ? pr : []))
           .catch(() => setProducts([])),
         api("/seller/orders")
@@ -184,7 +264,7 @@ export default function Seller() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [user?.id]);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
@@ -403,9 +483,28 @@ export default function Seller() {
 
       if (editId) {
         await api(`/seller/products/${editId}/update`, { method: "POST", body });
+        await cacheSellerProduct(user?.id, {
+          id: editId,
+          name: body?.name || { uz: form.name_uz, ru: form.name_ru, en: form.name_en },
+          price: body?.price ?? form?.price,
+          stock: body?.stock ?? form?.stock,
+          status: body?.status || "pending",
+          images: body?.images || form?.images || [],
+          seller_id: user?.id,
+        });
         setMsg("Mahsulot yangilandi ✓");
       } else {
         await api("/seller/products", { method: "POST", body });
+        await cacheSellerProduct(user?.id, {
+          id: body?.id || `local-${Date.now()}`,
+          name: body?.name || { uz: form.name_uz, ru: form.name_ru, en: form.name_en },
+          price: body?.price ?? form?.price,
+          stock: body?.stock ?? form?.stock,
+          status: "pending",
+          images: body?.images || form?.images || [],
+          created_at: new Date().toISOString(),
+          seller_id: user?.id,
+        });
         setMsg("Mahsulot moderatsiyaga yuborildi ✓");
       }
 
@@ -1199,12 +1298,19 @@ export default function Seller() {
 
             {(() => {
               const q = productSearch.trim().toLowerCase();
+              const tokens = q.split(/\s+/).filter(Boolean);
               const filtered = !q
                 ? products
                 : products.filter((pr) => {
-                    const name = ml(pr.name, lang).toLowerCase();
-                    const id = String(pr.id || "").toLowerCase();
-                    return name.includes(q) || id.includes(q);
+                    const n = pr?.name;
+                    const parts: string[] = [];
+                    if (typeof n === "string") parts.push(n);
+                    else if (n && typeof n === "object") {
+                      parts.push(String(n.uz || ""), String(n.ru || ""), String(n.en || ""));
+                    }
+                    parts.push(String(pr.id || ""), String(pr.status || ""), String(pr.brand || ""));
+                    const blob = parts.join(" ").toLowerCase();
+                    return tokens.every((t) => blob.includes(t));
                   });
               if (products.length > 0 && filtered.length === 0) {
                 return <Text style={st.empty}>Qidiruv bo'yicha mahsulot topilmadi</Text>;

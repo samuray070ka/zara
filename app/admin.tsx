@@ -196,9 +196,33 @@ const [dashboardResetConfirmText, setDashboardResetConfirmText] = useState("");
         if (alive()) setOrders(Array.isArray(data) ? data : []);
       }
       if (s === "products" || s === "flash") {
-        const qs = s === "products" && prodFilter ? `?status=${encodeURIComponent(prodFilter)}` : "";
-        const data = await api(`/admin/products${qs}`);
-        if (alive()) setProducts(Array.isArray(data) ? data : []);
+        // Backend max ~100/page — skip orqali HAMMASINI yig'amiz (backend o'zgarmaydi)
+        const pageSize = 100;
+        const statusPart =
+          s === "products" && prodFilter
+            ? `&status=${encodeURIComponent(prodFilter)}`
+            : "";
+        const all: any[] = [];
+        const seen = new Set<string>();
+        let skip = 0;
+        for (let page = 0; page < 50; page++) {
+          const chunk = await api(
+            `/admin/products?skip=${skip}&limit=${pageSize}${statusPart}`
+          ).catch(() => []);
+          const list = Array.isArray(chunk) ? chunk : [];
+          if (!list.length) break;
+          const before = all.length;
+          for (const p of list) {
+            const id = String(p?.id || "");
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            all.push(p);
+          }
+          // skip ishlamasa yoki oxirgi sahifa
+          if (all.length === before || list.length < pageSize) break;
+          skip += pageSize;
+        }
+        if (alive()) setProducts(all);
       }
       if (s === "sellers") {
         const data = await api(`/admin/users?role=seller${userQ ? `&q=${encodeURIComponent(userQ)}` : ""}`);
@@ -420,19 +444,32 @@ const getEtaInputValue = (order: any) =>
 
 const normalizedProdSearch = prodSearch.trim().toLowerCase();
 
+const productSearchBlob = (p: any) => {
+  const parts: string[] = [];
+  const n = p?.name;
+  if (typeof n === "string") parts.push(n);
+  else if (n && typeof n === "object") {
+    parts.push(String(n.uz || ""), String(n.ru || ""), String(n.en || ""));
+  }
+  parts.push(String(p?.id || ""));
+  parts.push(String(p?.seller_shop || ""), String(p?.seller_name || ""), String(p?.seller_phone || ""));
+  parts.push(String(p?.status || ""), String(p?.brand || ""));
+  return parts.join(" ").toLowerCase();
+};
+
 const visibleProducts = useMemo(() => {
   if (sec === "products" && prodImageSearch && Array.isArray(prodImageResults)) {
     return prodImageResults;
   }
   const list = Array.isArray(products) ? products : [];
-  if (sec !== "products" || prodFilter !== "approved" || !normalizedProdSearch) return list;
+  if (sec !== "products" || !normalizedProdSearch) return list;
 
+  const tokens = normalizedProdSearch.split(/\s+/).filter(Boolean);
   return list.filter((p) => {
-    const name = ml(p.name, lang).toLowerCase();
-    const idText = String(p.id || "").toLowerCase();
-    return name.includes(normalizedProdSearch) || idText.includes(normalizedProdSearch);
+    const blob = productSearchBlob(p);
+    return tokens.every((t) => blob.includes(t));
   });
-}, [products, sec, prodFilter, normalizedProdSearch, lang, prodImageSearch, prodImageResults]);
+}, [products, sec, normalizedProdSearch, prodImageSearch, prodImageResults]);
 
   const runAdminImageSearch = async () => {
     try {
@@ -903,19 +940,19 @@ const visibleProducts = useMemo(() => {
             </View>
 
             <View style={{ flexDirection: "row", gap: S.sm, marginBottom: S.md, alignItems: "center" }}>
-              {(prodFilter === "approved" || prodImageSearch) && (
-                <TextInput
-                  testID="admin-approved-search"
-                  style={[st.input, { flex: 1, backgroundColor: "#FFFFFF", borderColor: C.borderStrong || C.border, borderWidth: 1.5 }]}
-                  value={prodSearch}
-                  onChangeText={(v) => {
-                    setProdSearch(v);
-                    if (prodImageSearch) clearAdminImageSearch();
-                  }}
-                  placeholder="Mahsulotlarni matn orqali qidirish"
-                  placeholderTextColor={C.muted}
-                />
-              )}
+              <TextInput
+                testID="admin-product-text-search"
+                style={[st.input, { flex: 1, backgroundColor: "#FFFFFF", borderColor: C.borderStrong || C.border, borderWidth: 1.5 }]}
+                value={prodSearch}
+                onChangeText={(v) => {
+                  setProdSearch(v);
+                  if (prodImageSearch) clearAdminImageSearch();
+                }}
+                placeholder="Nomi, sotuvchi, telefon yoki ID bo'yicha qidirish..."
+                placeholderTextColor={C.muted}
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
               <Pressable
                 testID="admin-product-image-search"
                 style={st.adminImageBtn}
@@ -950,10 +987,10 @@ const visibleProducts = useMemo(() => {
             ) : visibleProducts.length === 0 ? (
               <EmptyState
                 title={
-                  prodFilter === "pending"
-                    ? "Moderatsiyada mahsulot topilmadi"
-                    : prodFilter === "approved" && prodSearch.trim()
+                  prodSearch.trim()
                     ? "Qidiruv bo'yicha mahsulot topilmadi"
+                    : prodFilter === "pending"
+                    ? "Moderatsiyada mahsulot topilmadi"
                     : "Mahsulot topilmadi"
                 }
                 subtitle="Filtrni o'zgartirib yoki keyinroq qayta tekshirib ko'ring."
