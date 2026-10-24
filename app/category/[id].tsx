@@ -26,6 +26,8 @@ export default function CategoryPage() {
 
   const isSeller = id?.startsWith("seller-");
   const sellerId = isSeller ? id!.replace("seller-", "") : null;
+  const isAll = id === "all";
+
 
   const cols = Math.min(6, Math.max(2, Math.floor(width / 220)));
   const cardW = (Math.min(width, 1200) - S.lg * 2 - S.md * (cols - 1)) / cols;
@@ -36,7 +38,9 @@ export default function CategoryPage() {
     const applyCategories = (c: any[]) => {
       if (!active) return;
       setCats(c);
-      if (!isSeller) {
+      if (isAll) {
+        setTitle("Barchasi");
+      } else if (!isSeller) {
         const cat = c.find((x: any) => x.id === id);
         if (cat) setTitle(ml(cat.name, lang));
       }
@@ -51,19 +55,30 @@ export default function CategoryPage() {
     return () => {
       active = false;
     };
-  }, [id, lang, isSeller]);
+  }, [id, lang, isSeller, isAll]);
 
   useEffect(() => {
     setLoading(true);
     const url = isSeller
       ? `/products?seller_id=${sellerId}&sort=${sort}&limit=50`
+      : isAll
+      ? `/products?sort=${sort}&limit=50`
       : `/products?category_id=${sub || id}&sort=${sort}&limit=50`;
     api(url).then((r) => {
-      setItems(r.items);
+      let list = Array.isArray(r?.items) ? r.items : [];
+      if (isAll) {
+        // aralashtirib chiqaramiz
+        for (let i = list.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [list[i], list[j]] = [list[j], list[i]];
+        }
+      }
+      setItems(list);
       setLoading(false);
-      if (isSeller && r.items[0]) setTitle("Do'kon");
+      if (isAll) setTitle("Barchasi");
+      if (isSeller && list[0]) setTitle("Do'kon");
     }).catch(() => setLoading(false));
-  }, [id, sort, sub]);
+  }, [id, sort, sub, isAll, isSeller, sellerId]);
 
   const subCats = cats.filter((c) => c.parent_id === id);
 

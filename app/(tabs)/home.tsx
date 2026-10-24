@@ -16,7 +16,7 @@ import ProductCard from "@/src/components/ProductCard";
 
 type FeedResponse = { items: any[]; total: number };
 
-/** Home feed xotira cache — qayta ochganda darhol ko'rsatish */
+/** Home feed xotira cache — birinchi ochilishda tez ko'rsatish */
 const _homeMem: {
   banners?: any[];
   flash?: any[];
@@ -25,7 +25,19 @@ const _homeMem: {
   total?: number;
   at: number;
 } = { at: 0 };
-const HOME_MEM_TTL_MS = 45_000;
+const HOME_MEM_TTL_MS = 30_000;
+
+function shuffleArray<T>(arr: T[]): T[] {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = a[i];
+    a[i] = a[j];
+    a[j] = t;
+  }
+  return a;
+}
+
 
 function Countdown({ endsAt }: { endsAt: string }) {
   const [left, setLeft] = useState("");
@@ -106,20 +118,20 @@ export default function Home() {
   const { width } = useWindowDimensions();
   const { t, lang } = useLang();
   const { token } = useAuth();
-  const [banners, setBanners] = useState<any[]>(() => _homeMem.banners || []);
+  const [banners, setBanners] = useState<any[]>([]);
   const [cats, setCats] = useState<any[]>([]);
-  const [flash, setFlash] = useState<any[]>(() => _homeMem.flash || []);
-  const [recs, setRecs] = useState<any[]>(() => _homeMem.recs || []);
-  const [feed, setFeed] = useState<any[]>(() => _homeMem.feed || []);
-  const [total, setTotal] = useState(() => _homeMem.total || 0);
+  const [flash, setFlash] = useState<any[]>([]);
+  const [recs, setRecs] = useState<any[]>([]);
+  const [feed, setFeed] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [bannersLoading, setBannersLoading] = useState(!(_homeMem.banners?.length));
+  const [bannersLoading, setBannersLoading] = useState(true);
   const [catsLoading, setCatsLoading] = useState(true);
-  const [flashLoading, setFlashLoading] = useState(!(_homeMem.flash?.length));
-  const [recsLoading, setRecsLoading] = useState(!(_homeMem.recs?.length));
-  const [feedLoading, setFeedLoading] = useState(!(_homeMem.feed?.length));
-  const skipRef = useRef(_homeMem.feed?.length || 0);
+  const [flashLoading, setFlashLoading] = useState(true);
+  const [recsLoading, setRecsLoading] = useState(true);
+  const [feedLoading, setFeedLoading] = useState(true);
+  const skipRef = useRef(0);
   const requestRef = useRef(0);
 
   const cols = Math.min(6, Math.max(2, Math.floor(width / 220)));
@@ -128,6 +140,8 @@ export default function Home() {
   const load = useCallback(async () => {
     const requestId = ++requestRef.current;
 
+    // Cache'dan darhol ko'rsatish (skeleton kutmasdan)
+    const fresh = Date.now() - _homeMem.at < HOME_MEM_TTL_MS;
     if (_homeMem.feed?.length) {
       setFeed(_homeMem.feed);
       setTotal(_homeMem.total || 0);
@@ -154,30 +168,7 @@ export default function Home() {
       if (requestRef.current === requestId) cb();
     };
 
-    const feedTask = api("/products?sort=mix&limit=12&skip=0")
-      .then((data: FeedResponse) =>
-        safe(() => {
-          const items = Array.isArray(data?.items) ? data.items : [];
-          setFeed(items);
-          setTotal(Number(data?.total || 0));
-          skipRef.current = items.length;
-          _homeMem.feed = items;
-          _homeMem.total = Number(data?.total || 0);
-          _homeMem.at = Date.now();
-        })
-      )
-      .catch(() =>
-        safe(() => {
-          if (!_homeMem.feed?.length) {
-            setFeed([]);
-            setTotal(0);
-            skipRef.current = 0;
-          }
-        })
-      )
-      .finally(() => safe(() => setFeedLoading(false)));
-
-    const rest = [
+    const tasks = [
       api("/banners")
         .then((data) =>
           safe(() => {
@@ -219,31 +210,113 @@ export default function Home() {
         )
         .catch(() => safe(() => setRecs([])))
         .finally(() => safe(() => setRecsLoading(false))),
+      api("/products?sort=mix&limit=40&skip=0")
+        .then((data: FeedResponse) =>
+          safe(() => {
+            const items = shuffleArray(Array.isArray(data?.items) ? data.items : []);
+            setFeed(items);
+            setTotal(Number(data?.total || 0));
+            skipRef.current = items.length;
+            _homeMem.feed = items;
+            _homeMem.total = Number(data?.total || 0);
+            _homeMem.at = Date.now();
+          })
+        )
+        .catch(() =>
+          safe(() => {
+            if (!_homeMem.feed?.length) {
+              setFeed([]);
+              setTotal(0);
+              skipRef.current = 0;
+            }
+          })
+        )
+        .finally(() => safe(() => setFeedLoading(false))),
     ];
 
-    await Promise.allSettled([feedTask, ...rest]);
+    await Promise.allSettled(tasks);
     safe(() => setRefreshing(false));
   }, [token]);
 
+  // Home.tsx ichida, load dan keyin qo‘shing
+useEffect(() => {
+  if (feed.length === 0 || recs.length === 0) return;
+
+  setFeed((prev) =>
+    prev.map((item) => {
+      const hasImage =
+        (Array.isArray(item.images) && item.images.length > 0) ||
+        !!item.image ||
+        !!item.preview_image;
+
+      if (hasImage) return item;
+
+      const fromRecs = recs.find((r) => r.id === item.id);
+      if (!fromRecs) return item;
+
+      return {
+        ...item,
+        images: fromRecs.images?.length
+          ? fromRecs.images
+          : fromRecs.image
+          ? [fromRecs.image]
+          : item.images,
+        image: fromRecs.image || fromRecs.images?.[0] || item.image,
+        preview_image: fromRecs.preview_image || item.preview_image,
+      };
+    })
+  );
+}, [recs]); // faqat recs o‘zgarganda
   useEffect(() => {
-    readCachedCategories()
-      .then((cached) => {
-        if (!cached?.length) return;
-        setCats(cached.filter((x: any) => !x.parent_id));
-        setCatsLoading(false);
-      })
-      .catch(() => {});
+    readCachedCategories().then((cached) => {
+      if (!cached?.length) return;
+      setCats(cached.filter((x: any) => !x.parent_id));
+      setCatsLoading(false);
+    }).catch(() => {});
     load();
   }, [load]);
 
+  // Feed da rasm bo‘sh bo‘lsa — tavsiyalardan olish
+useEffect(() => {
+  if (!feed.length || !recs.length) return;
+
+  setFeed((prev) => {
+    let changed = false;
+    const next = prev.map((item) => {
+      const img0 = Array.isArray(item.images) ? item.images[0] : item.images;
+      const hasRealImage = typeof img0 === "string" && img0.trim().length > 10;
+
+      if (hasRealImage) return item;
+
+      const fromRecs = recs.find((r) => r.id === item.id);
+      if (!fromRecs) return item;
+
+      const recImg = Array.isArray(fromRecs.images) ? fromRecs.images[0] : fromRecs.images;
+      if (!recImg || (typeof recImg === "string" && recImg.trim().length < 10)) return item;
+
+      changed = true;
+      return {
+        ...item,
+        images: fromRecs.images?.length ? fromRecs.images : [recImg],
+        image: fromRecs.image || recImg,
+      };
+    });
+
+    return changed ? next : prev;
+  });
+}, [recs, feed.length]); // feed.length — faqat birinchi yuklanganda
   const loadMore = async () => {
     if (loadingMore || feedLoading || feed.length >= total) return;
     setLoadingMore(true);
     try {
-      const p = await api(`/products?sort=mix&limit=12&skip=${skipRef.current}`);
-      const more = p.items || [];
-      setFeed((prev) => [...prev, ...more]);
-      skipRef.current += more.length;
+      const p = await api(`/products?sort=mix&limit=20&skip=${skipRef.current}`);
+      const more = shuffleArray(p.items || []);
+      setFeed((prev) => {
+        const seen = new Set(prev.map((x: any) => x.id));
+        const unique = more.filter((x: any) => x?.id && !seen.has(x.id));
+        return shuffleArray([...prev, ...unique]);
+      });
+      skipRef.current += (p.items || []).length;
     } catch {}
     setLoadingMore(false);
   };
@@ -252,7 +325,8 @@ export default function Home() {
     if (b.link_type === "category" && b.link_id) router.push(`/category/${b.link_id}`);
     else if (b.link_type === "product" && b.link_id) router.push(`/product/${b.link_id}`);
   };
-
+console.log("FEED[0]:", JSON.stringify(feed[0], null, 2));
+console.log("RECS[0]:", JSON.stringify(recs[0], null, 2));
   const header = (
     <View style={{ maxWidth: 1200, width: "100%", alignSelf: "center" }}>
       {bannersLoading && banners.length === 0 ? (
@@ -262,7 +336,7 @@ export default function Home() {
           {banners.map((b, i) => (
             <Animated.View key={b.id} entering={FadeInDown.delay(i * 100).springify()}>
               <Pressable testID={`banner-${i}`} onPress={() => onBanner(b)} style={[st.banner, { width: Math.min(width - S.lg * 2, 640) }]}>
-                <Image source={{ uri: b.image }} style={StyleSheet.absoluteFill} contentFit="cover" transition={200} />
+                <Image source={{ uri: b.image }} style={StyleSheet.absoluteFill} contentFit="cover" transition={300} />
                 <LinearGradient colors={["transparent", "rgba(3,7,18,0.85)"]} style={StyleSheet.absoluteFill} />
                 <Text style={st.bannerTitle}>{b.title}</Text>
               </Pressable>
@@ -276,6 +350,16 @@ export default function Home() {
         <CategorySkeletons />
       ) : cats.length ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.sm }}>
+          <Pressable
+            testID="category-chip-all"
+            style={st.catChip}
+            onPress={() => router.push("/category/all")}
+          >
+            <View style={[st.catIcon, { backgroundColor: C.brandSoft }]}>
+              <Ionicons name="grid" size={20} color={C.brandDark} />
+            </View>
+            <Text style={st.catTxt}>Barchasi</Text>
+          </Pressable>
           {cats.map((c) => {
             const catImg = c.preview_image || (c as any).image;
             return (
@@ -364,13 +448,13 @@ export default function Home() {
         data={feed}
         keyExtractor={(p, index) => p?.id || `feed-${index}`}
         numColumns={cols}
-        initialNumToRender={6}
-        maxToRenderPerBatch={6}
-        windowSize={5}
-        removeClippedSubviews
         renderItem={({ item, index }) => (
           <View style={{ width: cardW, marginBottom: S.md, marginRight: (index + 1) % cols === 0 ? 0 : S.md }}>
-            <ProductCard product={item} index={index % cols} width={cardW} />
+            <ProductCard 
+              product={item} 
+              index={index % cols} 
+              width={cardW}
+            />
           </View>
         )}
         columnWrapperStyle={feed.length ? { paddingHorizontal: S.lg, maxWidth: 1200, alignSelf: "center", width: "100%" } : undefined}
@@ -379,16 +463,7 @@ export default function Home() {
         onEndReached={loadMore}
         onEndReachedThreshold={0.4}
         ListFooterComponent={loadingMore ? <ActivityIndicator color={C.brand} style={{ marginVertical: S.lg }} /> : <View style={{ height: S.xl }} />}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={() => {
-              setRefreshing(true);
-              load();
-            }}
-            tintColor={C.brand}
-          />
-        }
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={C.brand} />}
         showsVerticalScrollIndicator={false}
       />
     </View>
@@ -400,7 +475,7 @@ const st = StyleSheet.create({
   topBar: { backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: S.sm },
   topInner: { flexDirection: "row", alignItems: "center", gap: S.md, paddingHorizontal: S.lg, maxWidth: 1200, width: "100%", alignSelf: "center" },
   logoRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  logoImg: { width: 48, height: 48, borderRadius: 12 },
+  logoImg: { width: 48, height: 48, borderRadius: 12 },   // ← logo kattalashtirildi
   logoTxt: { fontSize: 20, fontWeight: "900", color: C.onSurface, letterSpacing: -0.5 },
   searchBar: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: C.tertiary, borderRadius: R.pill, paddingHorizontal: S.lg, height: 42 },
   searchTxt: { color: C.muted, fontSize: 14 },

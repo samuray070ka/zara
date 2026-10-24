@@ -960,11 +960,37 @@ const visibleProducts = useMemo(() => {
               />
             ) : visibleProducts.map((p) => (
               <View key={p.id} style={st.card}>
-                <View style={st.rowBetween}>
-                  <Text style={st.bold} numberOfLines={1}>{ml(p.name, lang)}</Text>
-                  <Text style={{ fontWeight: "800", color: C.onSurface }}>{fmt(p.display_price ?? p.effective_price ?? p.price)}</Text>
+                <View style={{ flexDirection: "row", gap: 12, marginBottom: 8 }}>
+                  {(p.images?.[0] || p.image || p.preview_image) ? (
+                    <Image
+                      source={{ uri: p.images?.[0] || p.image || p.preview_image }}
+                      style={{ width: 72, height: 72, borderRadius: 10, backgroundColor: "#E5E7EB" }}
+                      contentFit="cover"
+                    />
+                  ) : (
+                    <View style={{ width: 72, height: 72, borderRadius: 10, backgroundColor: "#E5E7EB", alignItems: "center", justifyContent: "center" }}>
+                      <Ionicons name="image-outline" size={28} color="#9CA3AF" />
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <View style={st.rowBetween}>
+                      <Text style={[st.bold, { flex: 1, marginRight: 8 }]} numberOfLines={2}>{ml(p.name, lang)}</Text>
+                      <Text style={{ fontWeight: "800", color: C.onSurface }}>{fmt(p.display_price ?? p.effective_price ?? p.price)}</Text>
+                    </View>
+                    <Text style={st.meta}>
+                      Qoldiq: {p.stock} dona • Status: {p.status} {p.pinned ? "• 📌 PIN" : ""}
+                    </Text>
+                    <Text style={[st.meta, { color: C.brandDark, fontWeight: "700", marginTop: 2 }]}>
+                      🏪 {p.seller_shop || p.seller_name || "Sotuvchi"}
+                      {p.seller_phone ? ` • ${p.seller_phone}` : ""}
+                    </Text>
+                    {!!p.created_at && (
+                      <Text style={[st.meta, { marginTop: 2 }]}>
+                        🕒 {new Date(p.created_at).toLocaleString()}
+                      </Text>
+                    )}
+                  </View>
                 </View>
-                <Text style={st.meta}>Qoldiq: {p.stock} dona • Status: {p.status} {p.pinned ? "• 📌 PIN" : ""}</Text>
                 <View style={st.markupRow}>
                   <Ionicons name="pricetag-outline" size={14} color={C.brandDark} />
                   <Text style={st.markupInfo}>Sotuvchi narxi: {fmt(p.seller_price ?? p.price)} → Bozorda: {fmt(p.effective_price)} ({p.markup_percent ?? 0}% ustama)</Text>

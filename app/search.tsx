@@ -26,6 +26,53 @@ import ProductCard from "@/src/components/ProductCard";
 
 const SORTS = ["mix", "cheap", "expensive", "new", "rating"];
 
+function productTextBlob(p: any): string {
+  const parts: string[] = [];
+  const n = p?.name;
+  if (typeof n === "string") parts.push(n);
+  else if (n && typeof n === "object") {
+    parts.push(n.uz || "", n.ru || "", n.en || "");
+  }
+  const d = p?.desc;
+  if (typeof d === "string") parts.push(d);
+  else if (d && typeof d === "object") {
+    parts.push(d.uz || "", d.ru || "", d.en || "");
+  }
+  if (p?.brand) parts.push(String(p.brand));
+  if (p?.search_text) parts.push(String(p.search_text));
+  if (Array.isArray(p?.tags)) parts.push(p.tags.join(" "));
+  return parts.join(" ").toLowerCase();
+}
+
+function productMatchesQuery(p: any, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const blob = productTextBlob(p);
+  const tokens = q.split(/\s+/).filter(Boolean);
+  // barcha so'zlar matnda bo'lishi kerak
+  return tokens.every((t) => blob.includes(t));
+}
+
+async function fetchProductsClientFilter(query: string, sort: string): Promise<any[]> {
+  // Backend search ishlamasa ham: bir necha sahifa olib front dan filtrlaymiz
+  const pages = await Promise.all(
+    [0, 50, 100, 150].map((skip) =>
+      api(`/products?sort=${encodeURIComponent(sort || "mix")}&limit=50&skip=${skip}`).catch(() => ({ items: [] }))
+    )
+  );
+  const seen = new Set<string>();
+  const all: any[] = [];
+  for (const r of pages) {
+    for (const it of r?.items || []) {
+      if (!it?.id || seen.has(it.id)) continue;
+      seen.add(it.id);
+      all.push(it);
+    }
+  }
+  return all.filter((p) => productMatchesQuery(p, query));
+}
+
+
 export default function Search() {
   const router = useRouter();
   const params = useLocalSearchParams<{ imageMode?: string }>();
@@ -67,7 +114,6 @@ export default function Search() {
   const doSearch = async (term?: string, opts?: { silentHist?: boolean }) => {
     const query = String(term ?? q ?? "").trim();
     if (!query) return;
-    // rasm rejimini matn qidiruvga o'tganda tozalash
     setImageUri(null);
     setImageError("");
     setLoading(true);
@@ -78,14 +124,41 @@ export default function Search() {
       setHistory(newHist);
       storage.setItem("search_history", JSON.stringify(newHist)).catch(() => {});
     }
-    let url = `/products?search=${encodeURIComponent(query)}&sort=${sort}&limit=40`;
-    if (discountOnly) url += "&discount=true";
-    if (inStock) url += "&in_stock=true";
-    if (minP) url += `&min_price=${encodeURIComponent(minP)}`;
-    if (maxP) url += `&max_price=${encodeURIComponent(maxP)}`;
     try {
-      const r = await api(url);
-      const items = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
+      // 1) avval API search
+      let url = `/products?search=${encodeURIComponent(query)}&sort=${sort}&limit=50`;
+      if (discountOnly) url += "&discount=true";
+      if (inStock) url += "&in_stock=true";
+      if (minP) url += `&min_price=${encodeURIComponent(minP)}`;
+      if (maxP) url += `&max_price=${encodeURIComponent(maxP)}`;
+      let items: any[] = [];
+      try {
+        const r = await api(url);
+        items = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
+      } catch {
+        items = [];
+      }
+      // Frontend filtr (backend search ishlamasa ham topadi)
+      const local = await fetchProductsClientFilter(query, sort);
+      const map = new Map<string, any>();
+      for (const it of [...local, ...items]) {
+        if (it?.id) map.set(it.id, it);
+      }
+      items = Array.from(map.values()).filter((p) => productMatchesQuery(p, query));
+      if (discountOnly) {
+        items = items.filter((p) => Number(p.old_price || p.effective_old_price || 0) > 0);
+      }
+      if (inStock) {
+        items = items.filter((p) => Number(p.stock ?? p.stock_total_units ?? 0) > 0);
+      }
+      if (minP) {
+        const mn = Number(minP);
+        if (!Number.isNaN(mn)) items = items.filter((p) => Number(p.price ?? p.display_price ?? 0) >= mn);
+      }
+      if (maxP) {
+        const mx = Number(maxP);
+        if (!Number.isNaN(mx)) items = items.filter((p) => Number(p.price ?? p.display_price ?? 0) <= mx);
+      }
       setResults(items);
     } catch (e) {
       console.warn("text search failed", e);
