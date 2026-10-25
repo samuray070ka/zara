@@ -92,7 +92,9 @@ function getProductImage(p: any): string | undefined {
   return undefined;
 }
 
-const emptyForm = () => ({
+const LAST_SELLER_CATEGORY_KEY = "seller_last_category_id";
+
+const emptyForm = (categoryId = "") => ({
   name_uz: "",
   name_ru: "",
   name_en: "",
@@ -102,12 +104,29 @@ const emptyForm = () => ({
   box_price: "",
   units_per_box: "",
   stock: "",
-  category_id: "",
+  category_id: categoryId || "",
   desc_uz: "",
   images: [] as string[],
   /** piece = dona/quti, kg = kilogram */
   unit_type: "piece" as "piece" | "kg",
 });
+
+async function getLastSellerCategory(): Promise<string> {
+  try {
+    const v = await storage.getItem(LAST_SELLER_CATEGORY_KEY, "");
+    return String(v || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+async function saveLastSellerCategory(categoryId: string) {
+  try {
+    const id = String(categoryId || "").trim();
+    if (!id) return;
+    await storage.setItem(LAST_SELLER_CATEGORY_KEY, id);
+  } catch {}
+}
 
 
 /** Sotuvchi mahsulotlari 100+ — backend limitsiz front yechim */
@@ -508,10 +527,13 @@ export default function Seller() {
         setMsg("Mahsulot moderatsiyaga yuborildi ✓");
       }
 
+      if (form.category_id) {
+        await saveLastSellerCategory(form.category_id);
+      }
       setShowAddForm(false);
       setEditModal(false);
       setEditId(null);
-      setForm(emptyForm());
+      setForm(emptyForm(form.category_id || ""));
       setSimilarProducts([]);
       setSimilarError("");
       load();
@@ -934,7 +956,10 @@ export default function Seller() {
           <Pressable
             key={c.id}
             style={[st.chip, form.category_id === c.id && st.chipActive]}
-            onPress={() => setForm({ ...form, category_id: c.id })}
+            onPress={() => {
+              setForm({ ...form, category_id: c.id });
+              saveLastSellerCategory(c.id);
+            }}
           >
             <Text style={[st.chipTxt, form.category_id === c.id && { color: "#fff" }]}>
               {ml(c.name, lang)}
@@ -1173,13 +1198,19 @@ export default function Seller() {
             <View style={{ flexDirection: "row", gap: S.sm, marginBottom: S.md }}>
               <Pressable
                 style={[st.addBtn, { flex: 1, marginBottom: 0 }]}
-                onPress={() => {
-                  setShowAddForm(!showAddForm);
+                onPress={async () => {
+                  const opening = !showAddForm;
+                  setShowAddForm(opening);
                   setEditId(null);
-                  setForm(emptyForm());
                   setMsg("");
                   setSimilarProducts([]);
                   setSimilarError("");
+                  if (opening) {
+                    const lastCat = await getLastSellerCategory();
+                    setForm(emptyForm(lastCat));
+                  } else {
+                    setForm(emptyForm());
+                  }
                 }}
               >
                 <Ionicons name="add" size={18} color="#fff" />
