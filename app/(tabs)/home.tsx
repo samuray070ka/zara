@@ -350,16 +350,6 @@ console.log("RECS[0]:", JSON.stringify(recs[0], null, 2));
         <CategorySkeletons />
       ) : cats.length ? (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.sm }}>
-          <Pressable
-            testID="category-chip-all"
-            style={st.catChip}
-            onPress={() => router.push("/category/all")}
-          >
-            <View style={[st.catIcon, { backgroundColor: C.brandSoft }]}>
-              <Ionicons name="grid" size={20} color={C.brandDark} />
-            </View>
-            <Text style={st.catTxt}>Barchasi</Text>
-          </Pressable>
           {cats.map((c) => {
             const catImg = c.preview_image || (c as any).image;
             return (

@@ -9,7 +9,6 @@ import { api } from "@/src/lib/api";
 import { fetchCategories, readCachedCategories } from "@/src/lib/categories";
 import ProductCard from "@/src/components/ProductCard";
 
-const SORTS = ["mix", "cheap", "expensive", "new", "rating"];
 
 export default function CategoryPage() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -19,7 +18,6 @@ export default function CategoryPage() {
   const { t, lang } = useLang();
   const [items, setItems] = useState<any[]>([]);
   const [cats, setCats] = useState<any[]>([]);
-  const [sort, setSort] = useState("mix");
   const [sub, setSub] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState("");
@@ -39,7 +37,7 @@ export default function CategoryPage() {
       if (!active) return;
       setCats(c);
       if (isAll) {
-        setTitle("Barchasi");
+        setTitle("Hammasi");
       } else if (!isSeller) {
         const cat = c.find((x: any) => x.id === id);
         if (cat) setTitle(ml(cat.name, lang));
@@ -58,27 +56,45 @@ export default function CategoryPage() {
   }, [id, lang, isSeller, isAll]);
 
   useEffect(() => {
+    let active = true;
     setLoading(true);
-    const url = isSeller
-      ? `/products?seller_id=${sellerId}&sort=${sort}&limit=50`
-      : isAll
-      ? `/products?sort=${sort}&limit=50`
-      : `/products?category_id=${sub || id}&sort=${sort}&limit=50`;
-    api(url).then((r) => {
-      let list = Array.isArray(r?.items) ? r.items : [];
-      if (isAll) {
-        // aralashtirib chiqaramiz
-        for (let i = list.length - 1; i > 0; i--) {
-          const j = Math.floor(Math.random() * (i + 1));
-          [list[i], list[j]] = [list[j], list[i]];
+    (async () => {
+      try {
+        const all: any[] = [];
+        const seen = new Set<string>();
+        const pageSize = 50;
+        for (let skip = 0; skip < 2000; skip += pageSize) {
+          const url = isSeller
+            ? `/products?seller_id=${sellerId}&sort=mix&limit=${pageSize}&skip=${skip}`
+            : isAll
+            ? `/products?sort=mix&limit=${pageSize}&skip=${skip}`
+            : `/products?category_id=${encodeURIComponent(String(sub || id))}&sort=mix&limit=${pageSize}&skip=${skip}`;
+          const r = await api(url).catch(() => ({ items: [] }));
+          const list = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
+          if (!list.length) break;
+          const before = all.length;
+          for (const p of list) {
+            const pid = String(p?.id || "");
+            if (!pid || seen.has(pid)) continue;
+            seen.add(pid);
+            all.push(p);
+          }
+          if (all.length === before || list.length < pageSize) break;
         }
+        if (!active) return;
+        setItems(all);
+        if (isAll) setTitle("Hammasi");
+        if (isSeller && all[0]) setTitle("Do'kon");
+      } catch {
+        if (active) setItems([]);
+      } finally {
+        if (active) setLoading(false);
       }
-      setItems(list);
-      setLoading(false);
-      if (isAll) setTitle("Barchasi");
-      if (isSeller && list[0]) setTitle("Do'kon");
-    }).catch(() => setLoading(false));
-  }, [id, sort, sub, isAll, isSeller, sellerId]);
+    })();
+    return () => {
+      active = false;
+    };
+  }, [id, sub, isAll, isSeller, sellerId]);
 
   const subCats = cats.filter((c) => c.parent_id === id);
 
@@ -109,14 +125,10 @@ export default function CategoryPage() {
         </View>
       )}
 
-      <View style={{ height: 52, justifyContent: "center" }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.sm, alignItems: "center" }}>
-          {SORTS.map((s) => (
-            <Pressable key={s} testID={`category-sort-${s}`} style={[st.chip, sort === s && st.chipActive]} onPress={() => setSort(s)}>
-              <Text style={[st.chipTxt, sort === s && { color: "#fff" }]}>{t(`sort_${s}`)}</Text>
-            </Pressable>
-          ))}
-        </ScrollView>
+      <View style={{ paddingHorizontal: S.lg, paddingVertical: S.sm }}>
+        <View style={[st.chip, st.chipActive, { alignSelf: "flex-start" }]}>
+          <Text style={[st.chipTxt, { color: "#fff" }]}>Hammasi</Text>
+        </View>
       </View>
 
       {loading ? (
