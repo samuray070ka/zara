@@ -24,7 +24,6 @@ import { api } from "@/src/lib/api";
 import { searchByImage, pickerAssetToUri } from "@/src/lib/imageSearch";
 import ProductCard from "@/src/components/ProductCard";
 
-const SORTS = ["mix", "cheap", "expensive", "new", "rating"];
 
 function productTextBlob(p: any): string {
   const parts: string[] = [];
@@ -53,21 +52,24 @@ function productMatchesQuery(p: any, query: string): boolean {
   return tokens.every((t) => blob.includes(t));
 }
 
-async function fetchProductsClientFilter(query: string, sort: string): Promise<any[]> {
-  // Backend search ishlamasa ham: bir necha sahifa olib front dan filtrlaymiz
-  const pages = await Promise.all(
-    [0, 50, 100, 150].map((skip) =>
-      api(`/products?sort=${encodeURIComponent(sort || "mix")}&limit=50&skip=${skip}`).catch(() => ({ items: [] }))
-    )
-  );
+async function fetchProductsClientFilter(query: string): Promise<any[]> {
+  // Barcha mos mahsulotlar — skip bilan sahifa-sahifa
   const seen = new Set<string>();
   const all: any[] = [];
-  for (const r of pages) {
-    for (const it of r?.items || []) {
+  const pageSize = 50;
+  for (let skip = 0; skip < 2000; skip += pageSize) {
+    const r = await api(
+      `/products?sort=mix&limit=${pageSize}&skip=${skip}`
+    ).catch(() => ({ items: [] }));
+    const items = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
+    if (!items.length) break;
+    const before = all.length;
+    for (const it of items) {
       if (!it?.id || seen.has(it.id)) continue;
       seen.add(it.id);
       all.push(it);
     }
+    if (all.length === before || items.length < pageSize) break;
   }
   return all.filter((p) => productMatchesQuery(p, query));
 }
@@ -83,9 +85,6 @@ export default function Search() {
   const [results, setResults] = useState<any[]>([]);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [history, setHistory] = useState<string[]>([]);
-  const [sort, setSort] = useState("mix");
-  const [discountOnly, setDiscountOnly] = useState(false);
-  const [inStock, setInStock] = useState(false);
   const [minP, setMinP] = useState("");
   const [maxP, setMaxP] = useState("");
   const [loading, setLoading] = useState(false);
@@ -125,32 +124,36 @@ export default function Search() {
       storage.setItem("search_history", JSON.stringify(newHist)).catch(() => {});
     }
     try {
-      // 1) avval API search
-      let url = `/products?search=${encodeURIComponent(query)}&sort=${sort}&limit=50`;
-      if (discountOnly) url += "&discount=true";
-      if (inStock) url += "&in_stock=true";
-      if (minP) url += `&min_price=${encodeURIComponent(minP)}`;
-      if (maxP) url += `&max_price=${encodeURIComponent(maxP)}`;
-      let items: any[] = [];
-      try {
-        const r = await api(url);
-        items = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
-      } catch {
-        items = [];
+      // 1) API search (barcha sahifalar)
+      const apiItems: any[] = [];
+      const apiSeen = new Set<string>();
+      for (let skip = 0; skip < 2000; skip += 50) {
+        let url = `/products?search=${encodeURIComponent(query)}&sort=mix&limit=50&skip=${skip}`;
+        if (minP) url += `&min_price=${encodeURIComponent(minP)}`;
+        if (maxP) url += `&max_price=${encodeURIComponent(maxP)}`;
+        try {
+          const r = await api(url);
+          const chunk = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
+          if (!chunk.length) break;
+          let added = 0;
+          for (const it of chunk) {
+            if (!it?.id || apiSeen.has(it.id)) continue;
+            apiSeen.add(it.id);
+            apiItems.push(it);
+            added++;
+          }
+          if (!added || chunk.length < 50) break;
+        } catch {
+          break;
+        }
       }
-      // Frontend filtr (backend search ishlamasa ham topadi)
-      const local = await fetchProductsClientFilter(query, sort);
+      // 2) Frontend filtr — backend topmasa ham
+      const local = await fetchProductsClientFilter(query);
       const map = new Map<string, any>();
-      for (const it of [...local, ...items]) {
+      for (const it of [...local, ...apiItems]) {
         if (it?.id) map.set(it.id, it);
       }
-      items = Array.from(map.values()).filter((p) => productMatchesQuery(p, query));
-      if (discountOnly) {
-        items = items.filter((p) => Number(p.old_price || p.effective_old_price || 0) > 0);
-      }
-      if (inStock) {
-        items = items.filter((p) => Number(p.stock ?? p.stock_total_units ?? 0) > 0);
-      }
+      let items = Array.from(map.values()).filter((p) => productMatchesQuery(p, query));
       if (minP) {
         const mn = Number(minP);
         if (!Number.isNaN(mn)) items = items.filter((p) => Number(p.price ?? p.display_price ?? 0) >= mn);
@@ -194,11 +197,6 @@ export default function Search() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q]);
-
-  useEffect(() => {
-    if (searched && !imageUri && q.trim()) doSearch(q, { silentHist: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sort, discountOnly, inStock]);
 
   const runImageSearch = async (uri: string) => {
     if (!uri) return;
@@ -387,37 +385,10 @@ export default function Search() {
 
       {searched && !imageUri && (
         <>
-          <View style={{ height: 56, justifyContent: "center" }}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.sm, alignItems: "center" }}
-            >
-              {SORTS.map((s) => (
-                <Pressable
-                  key={s}
-                  testID={`search-sort-${s}`}
-                  style={[st.chip, sort === s && st.chipActive]}
-                  onPress={() => setSort(s)}
-                >
-                  <Text style={[st.chipTxt, sort === s && { color: "#fff" }]}>{t(`sort_${s}`)}</Text>
-                </Pressable>
-              ))}
-              <Pressable
-                testID="search-filter-discount"
-                style={[st.chip, discountOnly && st.chipActive]}
-                onPress={() => setDiscountOnly(!discountOnly)}
-              >
-                <Text style={[st.chipTxt, discountOnly && { color: "#fff" }]}>{t("discount")} %</Text>
-              </Pressable>
-              <Pressable
-                testID="search-filter-stock"
-                style={[st.chip, inStock && st.chipActive]}
-                onPress={() => setInStock(!inStock)}
-              >
-                <Text style={[st.chipTxt, inStock && { color: "#fff" }]}>Mavjud</Text>
-              </Pressable>
-            </ScrollView>
+          <View style={{ paddingHorizontal: S.lg, paddingTop: S.sm, paddingBottom: 4 }}>
+            <View style={[st.chip, st.chipActive, { alignSelf: "flex-start" }]}>
+              <Text style={[st.chipTxt, { color: "#fff" }]}>Hammasi</Text>
+            </View>
           </View>
           <View style={st.priceRow}>
             <TextInput
