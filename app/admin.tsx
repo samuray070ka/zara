@@ -108,6 +108,140 @@ function AdminMapView({ markers }: { markers: any[] }) {
 }
 
 
+
+/** Backend admin list da rasm/sotuvchi yo'q — boshqa API dan front da to'ldiramiz */
+function normProductName(name: any): string {
+  if (!name) return "";
+  if (typeof name === "string") return name.trim().toLowerCase();
+  return String(name.uz || name.ru || name.en || "").trim().toLowerCase();
+}
+
+function pickImg(p: any): string {
+  if (!p) return "";
+  const arr = Array.isArray(p.images) ? p.images : [];
+  for (const x of arr) {
+    if (typeof x === "string" && x.trim().length > 8) return x.trim();
+    if (x && typeof x === "object") {
+      const u = String(x.url || x.src || x.uri || "").trim();
+      if (u.length > 8) return u;
+    }
+  }
+  for (const k of ["image", "preview_image", "main_image", "thumbnail", "photo"]) {
+    const v = p[k];
+    if (typeof v === "string" && v.trim().length > 8) return v.trim();
+  }
+  return "";
+}
+
+async function enrichAdminProductList(list: any[]): Promise<any[]> {
+  if (!Array.isArray(list) || !list.length) return list || [];
+
+  // 1) Sotuvchilar xaritasi
+  const sellerMap: Record<string, { shop: string; phone: string; name: string }> = {};
+  try {
+    const sellers = await api("/admin/users?role=seller");
+    for (const u of Array.isArray(sellers) ? sellers : []) {
+      const si = u?.seller_info || {};
+      sellerMap[String(u.id)] = {
+        shop: String(si.shop_name || "").trim(),
+        phone: String(u.phone || "").trim(),
+        name: `${u.first_name || ""} ${u.last_name || ""}`.trim(),
+      };
+    }
+  } catch {}
+
+  // 2) Ochiq katalogdan rasm (id + nom bo'yicha)
+  const imgById: Record<string, string> = {};
+  const imgByName: Record<string, string> = {};
+  try {
+    for (let skip = 0; skip < 800; skip += 50) {
+      const r = await api(`/products?sort=new&limit=50&skip=${skip}`).catch(() => null);
+      const items = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
+      if (!items.length) break;
+      for (const it of items) {
+        const img = pickImg(it);
+        if (!img) continue;
+        if (it?.id) imgById[String(it.id)] = img;
+        const nk = normProductName(it?.name);
+        if (nk) imgByName[nk] = img;
+      }
+      if (items.length < 50) break;
+    }
+  } catch {}
+
+  // 3) Har bir mahsulot: /products/{id} (pending ham ishlaydi) — parallel 6 tadan
+  const out = list.map((p) => ({ ...p }));
+  const needDetail = out
+    .map((p, idx) => ({ p, idx }))
+    .filter(({ p }) => !pickImg(p) || !p.seller_shop);
+
+  const batchSize = 6;
+  for (let i = 0; i < needDetail.length; i += batchSize) {
+    const batch = needDetail.slice(i, i + batchSize);
+    await Promise.all(
+      batch.map(async ({ p, idx }) => {
+        try {
+          const full = await api(`/products/${encodeURIComponent(p.id)}`);
+          const img = pickImg(full) || imgById[String(p.id)] || imgByName[normProductName(p.name)] || "";
+          const shop =
+            full?.seller?.shop_name ||
+            sellerMap[String(p.seller_id)]?.shop ||
+            p.seller_shop ||
+            "";
+          const phone =
+            full?.seller?.phone ||
+            sellerMap[String(p.seller_id)]?.phone ||
+            p.seller_phone ||
+            "";
+          const sname =
+            sellerMap[String(p.seller_id)]?.name ||
+            p.seller_name ||
+            "";
+          out[idx] = {
+            ...out[idx],
+            images: img ? [img] : out[idx].images || [],
+            image: img || out[idx].image || null,
+            preview_image: img || out[idx].preview_image || null,
+            seller_shop: shop || "Sotuvchi",
+            seller_phone: phone,
+            seller_name: sname,
+            seller: full?.seller || out[idx].seller,
+          };
+        } catch {
+          const img = imgById[String(p.id)] || imgByName[normProductName(p.name)] || pickImg(p);
+          const s = sellerMap[String(p.seller_id)] || {};
+          out[idx] = {
+            ...out[idx],
+            images: img ? [img] : out[idx].images || [],
+            image: img || null,
+            preview_image: img || null,
+            seller_shop: out[idx].seller_shop || s.shop || "Sotuvchi",
+            seller_phone: out[idx].seller_phone || s.phone || "",
+            seller_name: out[idx].seller_name || s.name || "",
+          };
+        }
+      })
+    );
+  }
+
+  // 4) Detail shart bo'lmaganlar uchun ham seller map
+  for (let i = 0; i < out.length; i++) {
+    const p = out[i];
+    const s = sellerMap[String(p.seller_id)] || {};
+    if (!p.seller_shop || p.seller_shop === "Sotuvchi") {
+      if (s.shop) out[i] = { ...out[i], seller_shop: s.shop, seller_phone: s.phone || out[i].seller_phone, seller_name: s.name };
+    }
+    if (!pickImg(out[i])) {
+      const img = imgById[String(p.id)] || imgByName[normProductName(p.name)];
+      if (img) {
+        out[i] = { ...out[i], images: [img], image: img, preview_image: img };
+      }
+    }
+  }
+  return out;
+}
+
+
 export default function Admin() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -223,6 +357,13 @@ const [dashboardResetConfirmText, setDashboardResetConfirmText] = useState("");
           skip += pageSize;
         }
         if (alive()) setProducts(all);
+        // Rasm + sotuvchi nomini boshqa API lardan to'ldirish (backend o'zgarmaydi)
+        try {
+          const enriched = await enrichAdminProductList(all);
+          if (alive()) setProducts(enriched);
+        } catch (e) {
+          console.warn("enrichAdminProductList", e);
+        }
       }
       if (s === "sellers") {
         const data = await api(`/admin/users?role=seller${userQ ? `&q=${encodeURIComponent(userQ)}` : ""}`);
@@ -297,14 +438,149 @@ const [dashboardResetConfirmText, setDashboardResetConfirmText] = useState("");
     if (sec === "products") load("products");
   }, [sec, prodFilter, load]);
 
+
+  const loadDashHistoryFallback = async (metric: string) => {
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const isToday = (d: any) => {
+      if (!d) return false;
+      try {
+        const s = String(d);
+        if (s.slice(0, 10) === todayKey) return true;
+        const local = new Date(s);
+        if (Number.isNaN(local.getTime())) return false;
+        const y = local.getFullYear();
+        const m = String(local.getMonth() + 1).padStart(2, "0");
+        const day = String(local.getDate()).padStart(2, "0");
+        return `${y}-${m}-${day}` === todayKey;
+      } catch {
+        return false;
+      }
+    };
+    const mapOrder = (o: any) => ({
+      id: o.id || o.number,
+      primary: o.number || o.id || "Buyurtma",
+      secondary: `${o.client_name || o.client_phone || ""} • ${o.status || ""}`.trim(),
+      value: Number(o.total || o.subtotal || 0),
+      date: o.created_at,
+    });
+    const mapUser = (u: any, asSeller = false) => ({
+      id: u.id,
+      primary: asSeller
+        ? (u.seller_info?.shop_name || `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.phone)
+        : (`${u.first_name || ""} ${u.last_name || ""}`.trim() || u.phone),
+      secondary: u.phone || "",
+      value: asSeller ? Number(u.seller_info?.balance || 0) : 0,
+      date: u.created_at || u.seller_info?.applied_at,
+    });
+    const mapProduct = (p: any) => ({
+      id: p.id,
+      primary: typeof p.name === "string" ? p.name : p.name?.uz || p.name?.ru || p.id,
+      secondary: `Status: ${p.status || ""} • stock: ${p.stock ?? "—"}`,
+      value: Number(p.display_price ?? p.price ?? 0),
+      date: p.created_at,
+    });
+
+    // 1) Avval engil history endpoint
+    try {
+      const res = await api(`/admin/dashboard/history?metric=${encodeURIComponent(metric)}`);
+      if (res && (Array.isArray(res.items) || res.title)) return res;
+    } catch {}
+
+    // 2) Fallback — ishlaydigan API lar
+    if (metric === "clients") {
+      const users = await api("/admin/users?role=client").catch(() => []);
+      const list = Array.isArray(users) ? users : [];
+      return { metric, title: "Mijozlar ro'yxati", items: list.map((u: any) => mapUser(u)) };
+    }
+    if (metric === "sellers") {
+      const users = await api("/admin/users?role=seller").catch(() => []);
+      const list = (Array.isArray(users) ? users : []).filter(
+        (u: any) => u.seller_info?.approved
+      );
+      return { metric, title: "Tasdiqlangan sotuvchilar", items: list.map((u: any) => mapUser(u, true)) };
+    }
+    if (metric === "pending_sellers") {
+      const users = await api("/admin/users?role=seller").catch(() => []);
+      const list = (Array.isArray(users) ? users : []).filter(
+        (u: any) => u.seller_info && !u.seller_info.approved && !u.seller_info.rejected
+      );
+      return { metric, title: "Kutayotgan sotuvchilar", items: list.map((u: any) => mapUser(u, true)) };
+    }
+    if (metric === "couriers_online") {
+      const users = await api("/admin/users?role=courier").catch(() => []);
+      const list = (Array.isArray(users) ? users : []).filter(
+        (u: any) => u.courier_info?.online
+      );
+      return { metric, title: "Onlayn kuryerlar", items: list.map((u: any) => mapUser(u)) };
+    }
+    if (metric === "pending_products") {
+      // admin products pagination (frontend)
+      const all: any[] = [];
+      const seen = new Set<string>();
+      for (let skip = 0; skip < 2000; skip += 100) {
+        const chunk = await api(`/admin/products?status=pending&skip=${skip}&limit=100`).catch(() => []);
+        const list = Array.isArray(chunk) ? chunk : [];
+        if (!list.length) break;
+        const before = all.length;
+        for (const p of list) {
+          if (!p?.id || seen.has(p.id)) continue;
+          seen.add(p.id);
+          all.push(p);
+        }
+        if (all.length === before || list.length < 100) break;
+      }
+      return { metric, title: "Moderatsiyadagi mahsulotlar", items: all.map(mapProduct) };
+    }
+
+    // buyurtmalar
+    const ordersRaw = await api("/admin/orders").catch(() => []);
+    const orders = Array.isArray(ordersRaw) ? ordersRaw : [];
+    if (metric === "today_orders") {
+      return {
+        metric,
+        title: "Bugungi buyurtmalar",
+        items: orders.filter((o: any) => isToday(o.created_at)).map(mapOrder),
+      };
+    }
+    if (metric === "today_sales" || metric === "today_profit" || metric === "profit_margin") {
+      return {
+        metric,
+        title: metric === "today_sales" ? "Bugungi savdo" : "Bugungi sof foyda",
+        items: orders
+          .filter((o: any) => isToday(o.created_at) && o.status !== "cancelled")
+          .map(mapOrder),
+      };
+    }
+    if (metric === "new_orders") {
+      return {
+        metric,
+        title: "Yangi buyurtmalar",
+        items: orders.filter((o: any) => o.status === "new").map(mapOrder),
+      };
+    }
+    if (metric === "total_orders") {
+      return { metric, title: "Barcha buyurtmalar", items: orders.map(mapOrder) };
+    }
+    if (metric === "total_sales" || metric === "total_profit") {
+      return {
+        metric,
+        title: metric === "total_sales" ? "Jami savdo" : "Jami sof foyda",
+        items: orders.filter((o: any) => o.status === "delivered").map(mapOrder),
+      };
+    }
+    return { metric, title: "Tarix", items: [] };
+  };
+
   const Stat = ({ metric, label, value, icon, color }: any) => (
     <Pressable onPress={async () => {
       setDashHistoryLoading(true);
+      setDashHistory({ metric, title: label, items: [] });
       try {
-        const res = await api(`/admin/dashboard/history?metric=${metric}`);
+        const res = await loadDashHistoryFallback(metric);
         setDashHistory(res);
       } catch (e: any) {
-        setMsg(e.message || "Tarixni yuklab bo'lmadi");
+        setDashHistory({ metric, title: label, items: [] });
+        setMsg(e?.message || "Tarixni yuklab bo'lmadi");
       } finally {
         setDashHistoryLoading(false);
       }
