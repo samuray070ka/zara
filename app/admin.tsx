@@ -133,11 +133,53 @@ function pickImg(p: any): string {
   return "";
 }
 
-async function enrichAdminProductList(list: any[]): Promise<any[]> {
-  if (!Array.isArray(list) || !list.length) return list || [];
+async function enrichAdminProductBatch(
+  batch: any[],
+  sellerMap: Record<string, { shop: string; phone: string; name: string }>,
+  imgById: Record<string, string>,
+  imgByName: Record<string, string>
+): Promise<any[]> {
+  const out = batch.map((p) => ({ ...p }));
+  await Promise.all(
+    out.map(async (p, idx) => {
+      const sid = String(p.seller_id || "");
+      const s = sellerMap[sid] || {};
+      let img = pickImg(p) || imgById[String(p.id)] || imgByName[normProductName(p.name)] || "";
+      let shop = p.seller_shop || s.shop || "";
+      let phone = p.seller_phone || s.phone || "";
+      let sname = p.seller_name || s.name || "";
+      // Detail faqat rasm/sotuvchi yetishmasa
+      if ((!img || !shop) && p.id) {
+        try {
+          const full = await api(`/products/${encodeURIComponent(p.id)}`);
+          img = pickImg(full) || img;
+          shop = full?.seller?.shop_name || shop;
+          phone = full?.seller?.phone || phone;
+        } catch {}
+      }
+      out[idx] = {
+        ...out[idx],
+        images: img ? [img] : out[idx].images || [],
+        image: img || out[idx].image || null,
+        preview_image: img || out[idx].preview_image || null,
+        seller_shop: shop || "Sotuvchi",
+        seller_phone: phone,
+        seller_name: sname,
+      };
+    })
+  );
+  return out;
+}
 
-  // 1) Sotuvchilar xaritasi
+/** Sotuvchilar + katalog rasmlari — bir marta */
+async function loadAdminEnrichContext(): Promise<{
+  sellerMap: Record<string, { shop: string; phone: string; name: string }>;
+  imgById: Record<string, string>;
+  imgByName: Record<string, string>;
+}> {
   const sellerMap: Record<string, { shop: string; phone: string; name: string }> = {};
+  const imgById: Record<string, string> = {};
+  const imgByName: Record<string, string> = {};
   try {
     const sellers = await api("/admin/users?role=seller");
     for (const u of Array.isArray(sellers) ? sellers : []) {
@@ -149,15 +191,15 @@ async function enrichAdminProductList(list: any[]): Promise<any[]> {
       };
     }
   } catch {}
-
-  // 2) Ochiq katalogdan rasm (id + nom bo'yicha)
-  const imgById: Record<string, string> = {};
-  const imgByName: Record<string, string> = {};
+  // faqat 2 sahifa — tez
   try {
-    for (let skip = 0; skip < 800; skip += 50) {
-      const r = await api(`/products?sort=new&limit=50&skip=${skip}`).catch(() => null);
+    const pages = await Promise.all(
+      [0, 50].map((skip) =>
+        api(`/products?sort=new&limit=50&skip=${skip}`).catch(() => ({ items: [] }))
+      )
+    );
+    for (const r of pages) {
       const items = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
-      if (!items.length) break;
       for (const it of items) {
         const img = pickImg(it);
         if (!img) continue;
@@ -165,78 +207,20 @@ async function enrichAdminProductList(list: any[]): Promise<any[]> {
         const nk = normProductName(it?.name);
         if (nk) imgByName[nk] = img;
       }
-      if (items.length < 50) break;
     }
   } catch {}
+  return { sellerMap, imgById, imgByName };
+}
 
-  // 3) Har bir mahsulot: /products/{id} (pending ham ishlaydi) — parallel 6 tadan
-  const out = list.map((p) => ({ ...p }));
-  const needDetail = out
-    .map((p, idx) => ({ p, idx }))
-    .filter(({ p }) => !pickImg(p) || !p.seller_shop);
-
-  const batchSize = 6;
-  for (let i = 0; i < needDetail.length; i += batchSize) {
-    const batch = needDetail.slice(i, i + batchSize);
-    await Promise.all(
-      batch.map(async ({ p, idx }) => {
-        try {
-          const full = await api(`/products/${encodeURIComponent(p.id)}`);
-          const img = pickImg(full) || imgById[String(p.id)] || imgByName[normProductName(p.name)] || "";
-          const shop =
-            full?.seller?.shop_name ||
-            sellerMap[String(p.seller_id)]?.shop ||
-            p.seller_shop ||
-            "";
-          const phone =
-            full?.seller?.phone ||
-            sellerMap[String(p.seller_id)]?.phone ||
-            p.seller_phone ||
-            "";
-          const sname =
-            sellerMap[String(p.seller_id)]?.name ||
-            p.seller_name ||
-            "";
-          out[idx] = {
-            ...out[idx],
-            images: img ? [img] : out[idx].images || [],
-            image: img || out[idx].image || null,
-            preview_image: img || out[idx].preview_image || null,
-            seller_shop: shop || "Sotuvchi",
-            seller_phone: phone,
-            seller_name: sname,
-            seller: full?.seller || out[idx].seller,
-          };
-        } catch {
-          const img = imgById[String(p.id)] || imgByName[normProductName(p.name)] || pickImg(p);
-          const s = sellerMap[String(p.seller_id)] || {};
-          out[idx] = {
-            ...out[idx],
-            images: img ? [img] : out[idx].images || [],
-            image: img || null,
-            preview_image: img || null,
-            seller_shop: out[idx].seller_shop || s.shop || "Sotuvchi",
-            seller_phone: out[idx].seller_phone || s.phone || "",
-            seller_name: out[idx].seller_name || s.name || "",
-          };
-        }
-      })
-    );
-  }
-
-  // 4) Detail shart bo'lmaganlar uchun ham seller map
-  for (let i = 0; i < out.length; i++) {
-    const p = out[i];
-    const s = sellerMap[String(p.seller_id)] || {};
-    if (!p.seller_shop || p.seller_shop === "Sotuvchi") {
-      if (s.shop) out[i] = { ...out[i], seller_shop: s.shop, seller_phone: s.phone || out[i].seller_phone, seller_name: s.name };
-    }
-    if (!pickImg(out[i])) {
-      const img = imgById[String(p.id)] || imgByName[normProductName(p.name)];
-      if (img) {
-        out[i] = { ...out[i], images: [img], image: img, preview_image: img };
-      }
-    }
+async function enrichAdminProductList(list: any[]): Promise<any[]> {
+  if (!Array.isArray(list) || !list.length) return list || [];
+  const ctx = await loadAdminEnrichContext();
+  const BATCH = 10;
+  const out: any[] = [];
+  for (let i = 0; i < list.length; i += BATCH) {
+    const chunk = list.slice(i, i + BATCH);
+    const enriched = await enrichAdminProductBatch(chunk, ctx.sellerMap, ctx.imgById, ctx.imgByName);
+    out.push(...enriched);
   }
   return out;
 }
@@ -330,7 +314,7 @@ const [dashboardResetConfirmText, setDashboardResetConfirmText] = useState("");
         if (alive()) setOrders(Array.isArray(data) ? data : []);
       }
       if (s === "products" || s === "flash") {
-        // Backend max ~100/page — skip orqali HAMMASINI yig'amiz (backend o'zgarmaydi)
+        // 10 tadan chiqaramiz — birinchi 10 darhol, keyin qolganlari
         const pageSize = 100;
         const statusPart =
           s === "products" && prodFilter
@@ -339,6 +323,45 @@ const [dashboardResetConfirmText, setDashboardResetConfirmText] = useState("");
         const all: any[] = [];
         const seen = new Set<string>();
         let skip = 0;
+        let ctx: Awaited<ReturnType<typeof loadAdminEnrichContext>> | null = null;
+        const ensureCtx = async () => {
+          if (!ctx) ctx = await loadAdminEnrichContext();
+          return ctx;
+        };
+        const BATCH = 10;
+        let displayed = 0;
+
+        const enrichAndShow = async (from: number, to: number) => {
+          const slice = all.slice(from, to);
+          if (!slice.length) return;
+          const c = await ensureCtx();
+          const enriched = await enrichAdminProductBatch(
+            slice,
+            c.sellerMap,
+            c.imgById,
+            c.imgByName
+          );
+          if (!alive()) return;
+          setProducts((prev) => {
+            const map = new Map((prev || []).map((p: any) => [String(p.id), p]));
+            for (const p of enriched) map.set(String(p.id), p);
+            // tartib: all dagi id ketma-ketligi
+            const ordered: any[] = [];
+            const used = new Set<string>();
+            for (const p of all) {
+              const id = String(p.id);
+              if (map.has(id)) {
+                ordered.push(map.get(id));
+                used.add(id);
+              }
+            }
+            for (const [id, p] of map) {
+              if (!used.has(id)) ordered.push(p);
+            }
+            return ordered;
+          });
+        };
+
         for (let page = 0; page < 50; page++) {
           const chunk = await api(
             `/admin/products?skip=${skip}&limit=${pageSize}${statusPart}`
@@ -352,17 +375,32 @@ const [dashboardResetConfirmText, setDashboardResetConfirmText] = useState("");
             seen.add(id);
             all.push(p);
           }
-          // skip ishlamasa yoki oxirgi sahifa
-          if (all.length === before || list.length < pageSize) break;
+          if (all.length === before) break;
+
+          // yangi kelganlarni 10 tadan boyitib chiqarish
+          while (displayed < all.length) {
+            const next = Math.min(displayed + BATCH, all.length);
+            // skeleton sifatida boyitilmaganlarini ham darhol ko'rsatamiz
+            if (alive() && displayed === 0) {
+              setProducts(all.slice(0, next));
+            } else if (alive()) {
+              setProducts((prev) => {
+                const ids = new Set((prev || []).map((x: any) => String(x.id)));
+                const merged = [...(prev || [])];
+                for (const p of all.slice(displayed, next)) {
+                  if (!ids.has(String(p.id))) merged.push(p);
+                }
+                return merged;
+              });
+            }
+            await enrichAndShow(displayed, next);
+            displayed = next;
+            // loading ni birinchi batch dan keyin o'chirish
+            if (displayed >= BATCH && alive()) setLoadingSec(null);
+          }
+
+          if (list.length < pageSize) break;
           skip += pageSize;
-        }
-        if (alive()) setProducts(all);
-        // Rasm + sotuvchi nomini boshqa API lardan to'ldirish (backend o'zgarmaydi)
-        try {
-          const enriched = await enrichAdminProductList(all);
-          if (alive()) setProducts(enriched);
-        } catch (e) {
-          console.warn("enrichAdminProductList", e);
         }
       }
       if (s === "sellers") {
@@ -1331,7 +1369,11 @@ const visibleProducts = useMemo(() => {
                       const percent = parseFloat(markupEdit[p.id] ?? String(p.markup_percent ?? 0)) || 0;
                       await api(`/admin/products/${p.id}/markup`, { method: "POST", body: { percent } });
                       setMsg(`${ml(p.name, lang)} — foiz saqlandi ✓`);
-                      load("products");
+                      setProducts((prev) =>
+                        (prev || []).map((x) =>
+                          x.id === p.id ? { ...x, markup_percent: percent } : x
+                        )
+                      );
                     }}
                   >
                     <Text style={st.actTxt}>Foizni saqlash</Text>
@@ -1340,18 +1382,73 @@ const visibleProducts = useMemo(() => {
                 <View style={{ flexDirection: "row", gap: S.sm, marginTop: S.sm, flexWrap: "wrap" }}>
                   {p.status === "pending" && (
                     <>
-                      <Pressable testID={`admin-approve-${p.id}`} disabled={prodBusy === `${p.id}:approve`} style={[st.actBtn, { backgroundColor: C.success }, prodBusy === `${p.id}:approve` && { opacity: 0.7 }]} onPress={async () => { setProdBusy(`${p.id}:approve`); await api(`/admin/products/${p.id}/moderate`, { method: "POST", body: { action: "approve" } }).catch(() => {}); setProdBusy(null); load("products"); }}>
+                      <Pressable testID={`admin-approve-${p.id}`} disabled={prodBusy === `${p.id}:approve`} style={[st.actBtn, { backgroundColor: C.success }, prodBusy === `${p.id}:approve` && { opacity: 0.7 }]} onPress={async () => {
+                        setProdBusy(`${p.id}:approve`);
+                        try {
+                          await api(`/admin/products/${p.id}/moderate`, { method: "POST", body: { action: "approve" } });
+                          setProducts((prev) =>
+                            (prev || []).map((x) =>
+                              x.id === p.id ? { ...x, status: "approved" } : x
+                            ).filter((x) => (prodFilter === "pending" ? x.id !== p.id : true))
+                          );
+                          setMsg("Mahsulot tasdiqlandi ✓");
+                        } catch (e: any) {
+                          setMsg(e?.message || "Xatolik");
+                        } finally {
+                          setProdBusy(null);
+                        }
+                      }}>
                         <Text style={st.actTxt}>{prodBusy === `${p.id}:approve` ? "Yuklanmoqda..." : "Tasdiqlash"}</Text>
                       </Pressable>
-                      <Pressable testID={`admin-reject-${p.id}`} disabled={prodBusy === `${p.id}:reject`} style={[st.actBtn, { backgroundColor: C.error }, prodBusy === `${p.id}:reject` && { opacity: 0.7 }]} onPress={async () => { setProdBusy(`${p.id}:reject`); await api(`/admin/products/${p.id}/moderate`, { method: "POST", body: { action: "reject", reason: "Sifatsiz kontent" } }).catch(() => {}); setProdBusy(null); load("products"); }}>
+                      <Pressable testID={`admin-reject-${p.id}`} disabled={prodBusy === `${p.id}:reject`} style={[st.actBtn, { backgroundColor: C.error }, prodBusy === `${p.id}:reject` && { opacity: 0.7 }]} onPress={async () => {
+                        setProdBusy(`${p.id}:reject`);
+                        try {
+                          await api(`/admin/products/${p.id}/moderate`, { method: "POST", body: { action: "reject", reason: "Sifatsiz kontent" } });
+                          setProducts((prev) =>
+                            (prev || []).map((x) =>
+                              x.id === p.id ? { ...x, status: "rejected" } : x
+                            ).filter((x) => (prodFilter === "pending" || prodFilter === "approved" ? x.id !== p.id : true))
+                          );
+                          setMsg("Mahsulot rad etildi");
+                        } catch (e: any) {
+                          setMsg(e?.message || "Xatolik");
+                        } finally {
+                          setProdBusy(null);
+                        }
+                      }}>
                         <Text style={st.actTxt}>{prodBusy === `${p.id}:reject` ? "Yuklanmoqda..." : "Rad etish"}</Text>
                       </Pressable>
                     </>
                   )}
-                  <Pressable testID={`admin-pin-${p.id}`} style={[st.actBtn, { backgroundColor: C.inverse }]} onPress={async () => { await api(`/admin/products/${p.id}/moderate`, { method: "POST", body: { action: "pin" } }); load("products"); }}>
+                  <Pressable testID={`admin-pin-${p.id}`} style={[st.actBtn, { backgroundColor: C.inverse }]} onPress={async () => {
+                    setProdBusy(`${p.id}:pin`);
+                    try {
+                      await api(`/admin/products/${p.id}/moderate`, { method: "POST", body: { action: "pin" } });
+                      setProducts((prev) =>
+                        (prev || []).map((x) =>
+                          x.id === p.id ? { ...x, pinned: !x.pinned } : x
+                        )
+                      );
+                    } catch (e: any) {
+                      setMsg(e?.message || "Xatolik");
+                    } finally {
+                      setProdBusy(null);
+                    }
+                  }}>
                     <Text style={st.actTxt}>{p.pinned ? "Pin olish" : "📌 Pin qilish"}</Text>
                   </Pressable>
-                  <Pressable testID={`admin-delete-prod-${p.id}`} style={[st.actBtn, { backgroundColor: C.tertiary }]} onPress={async () => { await api(`/admin/products/${p.id}/moderate`, { method: "POST", body: { action: "delete" } }); load("products"); }}>
+                  <Pressable testID={`admin-delete-prod-${p.id}`} style={[st.actBtn, { backgroundColor: C.tertiary }]} onPress={async () => {
+                    setProdBusy(`${p.id}:delete`);
+                    try {
+                      await api(`/admin/products/${p.id}/moderate`, { method: "POST", body: { action: "delete" } });
+                      setProducts((prev) => (prev || []).filter((x) => x.id !== p.id));
+                      setMsg("O'chirildi");
+                    } catch (e: any) {
+                      setMsg(e?.message || "Xatolik");
+                    } finally {
+                      setProdBusy(null);
+                    }
+                  }}>
                     <Text style={[st.actTxt, { color: C.error }]}>O'chirish</Text>
                   </Pressable>
                 </View>

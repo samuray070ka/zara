@@ -207,6 +207,23 @@ async function cacheSellerProduct(sellerId: string | null | undefined, product: 
   } catch {}
 }
 
+async function uncacheSellerProduct(sellerId: string | null | undefined, productId: string) {
+  if (!productId) return;
+  try {
+    const key = `seller_products_extra_${sellerId || "me"}`;
+    const raw = await storage.getItem(key, "[]");
+    let arr: any[] = [];
+    try {
+      arr = JSON.parse((raw as string) || "[]");
+    } catch {
+      arr = [];
+    }
+    if (!Array.isArray(arr)) arr = [];
+    arr = arr.filter((x) => x?.id !== productId);
+    await storage.setItem(key, JSON.stringify(arr));
+  } catch {}
+}
+
 export default function Seller() {
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -223,6 +240,7 @@ export default function Seller() {
   const [deleteModal, setDeleteModal] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any>(null);
+  const [productBusy, setProductBusy] = useState<string | null>(null);
   const [form, setForm] = useState<any>(emptyForm());
   const [msg, setMsg] = useState("");
   const [confirmLogout, setConfirmLogout] = useState(false);
@@ -474,6 +492,7 @@ export default function Seller() {
     }
 
     setSavingProduct(true);
+    if (editId) setProductBusy(`${editId}:edit`);
     try {
       const parsedBoxPrice = form.box_price ? parseFloat(form.box_price) : null;
       const derivedPiecePrice = form.price
@@ -530,17 +549,43 @@ export default function Seller() {
       if (form.category_id) {
         await saveLastSellerCategory(form.category_id);
       }
+      const savedId = editId;
+      const localProduct: any = {
+        id: savedId || `tmp-${Date.now()}`,
+        name: { uz: form.name_uz, ru: form.name_ru, en: form.name_en },
+        price: body.price,
+        old_price: body.old_price,
+        stock: body.stock,
+        images: body.images || form.images || [],
+        image: (body.images || form.images || [])[0] || null,
+        category_id: body.category_id,
+        unit_type: body.unit_type,
+        box_price: body.box_price,
+        units_per_box: body.units_per_box,
+        seller_id: user?.id,
+      };
+      if (savedId) {
+        setProducts((prev) =>
+          (prev || []).map((x) =>
+            x.id === savedId
+              ? { ...x, ...localProduct, status: x.status || "pending" }
+              : x
+          )
+        );
+      } else {
+        setProducts((prev) => [{ ...localProduct, status: "pending" }, ...(prev || [])]);
+      }
       setShowAddForm(false);
       setEditModal(false);
       setEditId(null);
       setForm(emptyForm(form.category_id || ""));
       setSimilarProducts([]);
       setSimilarError("");
-      load();
     } catch (e: any) {
       setMsg(e?.message || "Xatolik yuz berdi");
     } finally {
       setSavingProduct(false);
+      setProductBusy(null);
     }
   };
 
@@ -578,23 +623,40 @@ export default function Seller() {
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
+    const pid = deleteTarget.id;
+    setProductBusy(`${pid}:delete`);
+    setDeleteModal(false);
     try {
-      await api(`/seller/products/${deleteTarget.id}/delete`, { method: "POST" });
+      // POST va DELETE — qaysi ishlasa
+      try {
+        await api(`/seller/products/${pid}/delete`, { method: "POST" });
+      } catch {
+        await api(`/seller/products/${pid}`, { method: "DELETE" });
+      }
+      await uncacheSellerProduct(user?.id, pid);
+      setProducts((prev) => (prev || []).filter((x) => x.id !== pid));
       setMsg("Mahsulot o‘chirildi ✓");
-      setDeleteModal(false);
       setDeleteTarget(null);
-      load();
     } catch (e: any) {
       setMsg(e?.message || "O‘chirishda xatolik");
+      setDeleteModal(true);
+    } finally {
+      setProductBusy(null);
     }
   };
 
   const handleToggleHide = async (p: any) => {
+    setProductBusy(`${p.id}:hide`);
     try {
-      await api(`/seller/products/${p.id}/toggle-hide`, { method: "POST" });
-      load();
+      const res = await api(`/seller/products/${p.id}/toggle-hide`, { method: "POST" });
+      const hidden = typeof res?.hidden === "boolean" ? res.hidden : !p.hidden;
+      setProducts((prev) =>
+        (prev || []).map((x) => (x.id === p.id ? { ...x, hidden } : x))
+      );
     } catch (e: any) {
       setMsg(e?.message || "Yashirishda xatolik");
+    } finally {
+      setProductBusy(null);
     }
   };
 
@@ -1450,9 +1512,15 @@ export default function Seller() {
 
                   {expanded && (
                     <View style={st.prodActionsPanel}>
-                      <Pressable style={st.prodActionBtn} onPress={() => startEdit(p)}>
+                      <Pressable
+                        style={[st.prodActionBtn, productBusy === `${p.id}:edit` && { opacity: 0.55 }]}
+                        disabled={productBusy === `${p.id}:edit`}
+                        onPress={() => startEdit(p)}
+                      >
                         <Ionicons name="create-outline" size={16} color={C.onSurface} />
-                        <Text style={st.prodActionTxt}>Edit</Text>
+                        <Text style={st.prodActionTxt}>
+                          {productBusy === `${p.id}:edit` ? "Saqlanmoqda..." : "Edit"}
+                        </Text>
                       </Pressable>
                       <Pressable style={st.prodActionBtn} onPress={() => handleToggleHide(p)}>
                         <Ionicons
@@ -1463,14 +1531,17 @@ export default function Seller() {
                         <Text style={st.prodActionTxt}>{p.hidden ? "Show" : "Hide"}</Text>
                       </Pressable>
                       <Pressable
-                        style={[st.prodActionBtn, st.prodActionBtnDanger]}
+                        style={[st.prodActionBtn, st.prodActionBtnDanger, productBusy?.startsWith(p.id) && { opacity: 0.55 }]}
+                        disabled={!!productBusy?.startsWith(String(p.id))}
                         onPress={() => {
                           setDeleteTarget(p);
                           setDeleteModal(true);
                         }}
                       >
                         <Ionicons name="trash-outline" size={16} color={C.error} />
-                        <Text style={[st.prodActionTxt, { color: C.error }]}>Delete</Text>
+                        <Text style={[st.prodActionTxt, { color: C.error }]}>
+                          {productBusy === `${p.id}:delete` ? "O'chirilmoqda..." : "Delete"}
+                        </Text>
                       </Pressable>
                     </View>
                   )}
@@ -1902,10 +1973,13 @@ export default function Seller() {
                 <Text style={[st.modalBtnTxt, { color: C.onSurface }]}>Bekor qilish</Text>
               </Pressable>
               <Pressable
-                style={[st.modalBtn, { backgroundColor: C.error, flex: 1 }]}
+                style={[st.modalBtn, { backgroundColor: C.error, flex: 1 }, productBusy?.includes(":delete") && { opacity: 0.7 }]}
+                disabled={!!productBusy?.includes(":delete")}
                 onPress={confirmDelete}
               >
-                <Text style={st.modalBtnTxt}>Ha, o‘chirish</Text>
+                <Text style={st.modalBtnTxt}>
+                  {productBusy?.includes(":delete") ? "O'chirilmoqda..." : "Ha, o‘chirish"}
+                </Text>
               </Pressable>
             </View>
           </View>

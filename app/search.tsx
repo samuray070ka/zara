@@ -21,7 +21,8 @@ import { storage } from "@/src/utils/storage";
 import { C, S, R } from "@/src/lib/theme";
 import { useLang } from "@/src/lib/i18n";
 import { api } from "@/src/lib/api";
-import { searchByImage, pickerAssetToUri } from "@/src/lib/imageSearch";
+import { searchByImageSections, pickerAssetToUri } from "@/src/lib/imageSearch";
+import ExactMatchCard from "@/src/lib/ExactMatchCard";
 import ProductCard from "@/src/components/ProductCard";
 
 
@@ -83,6 +84,7 @@ export default function Search() {
   const { t } = useLang();
   const [q, setQ] = useState("");
   const [results, setResults] = useState<any[]>([]);
+  const [exactResults, setExactResults] = useState<any[]>([]);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [history, setHistory] = useState<string[]>([]);
   const [minP, setMinP] = useState("");
@@ -166,6 +168,7 @@ export default function Search() {
     } catch (e) {
       console.warn("text search failed", e);
       setResults([]);
+    setExactResults([]);
     } finally {
       setLoading(false);
     }
@@ -180,6 +183,7 @@ export default function Search() {
       if (!imageUri) {
         setSearched(false);
         setResults([]);
+    setExactResults([]);
       }
       return;
     }
@@ -207,10 +211,13 @@ export default function Search() {
     setLoading(true);
     setSearched(true);
     setResults([]);
+    setExactResults([]);
+    setExactResults([]);
     try {
-      const items = await searchByImage(uri);
-      setResults(items);
-      if (!items.length) {
+      const { exact, similar } = await searchByImageSections(uri);
+      setExactResults(Array.isArray(exact) ? exact : []);
+      setResults(Array.isArray(similar) ? similar : []);
+      if (!(exact?.length || similar?.length)) {
         setImageError("O'xshash mahsulot topilmadi");
       }
     } catch (e: any) {
@@ -223,6 +230,7 @@ export default function Search() {
         setImageError(msg || "Rasm orqali qidirishda xatolik");
       }
       setResults([]);
+    setExactResults([]);
     } finally {
       setImageSearching(false);
       setLoading(false);
@@ -299,6 +307,7 @@ export default function Search() {
     setImageUri(null);
     setImageError("");
     setResults([]);
+    setExactResults([]);
     setSearched(false);
   };
 
@@ -332,6 +341,7 @@ export default function Search() {
                 setQ("");
                 setSearched(false);
                 setResults([]);
+    setExactResults([]);
                 setImageUri(null);
                 setImageError("");
               }}
@@ -445,13 +455,67 @@ export default function Search() {
                 marginRight: (index + 1) % cols === 0 ? 0 : S.md,
               }}
             >
-              <ProductCard product={item} index={index % cols} />
+              <View style={{ position: "relative" }}>
+                <ProductCard product={item} index={index % cols} />
+                {typeof item?.match_percent === "number" && (
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: 8,
+                      left: 8,
+                      zIndex: 5,
+                      backgroundColor:
+                        item.match_percent >= 90
+                          ? "#059669"
+                          : item.match_percent >= 70
+                          ? "#D97706"
+                          : "#6B7280",
+                      paddingHorizontal: 8,
+                      paddingVertical: 3,
+                      borderRadius: 999,
+                    }}
+                  >
+                    <Text style={{ color: "#fff", fontWeight: "800", fontSize: 11 }}>
+                      {item.match_percent}%
+                    </Text>
+                  </View>
+                )}
+              </View>
             </View>
           )}
+          ListHeaderComponent={
+            exactResults.length ? (
+              <View style={{ marginBottom: S.md }}>
+                {exactResults.map((item) => (
+                  <ExactMatchCard
+                    key={`exact-${item.id}`}
+                    item={item}
+                    onPress={(p) => router.push(`/product/${p.id}`)}
+                  />
+                ))}
+                {results.length > 0 && (
+                  <Text
+                    style={{
+                      marginHorizontal: S.lg,
+                      marginTop: S.sm,
+                      marginBottom: S.sm,
+                      fontWeight: "800",
+                      color: C.onSurface,
+                      fontSize: 15,
+                    }}
+                  >
+                    O'xshash mahsulotlar
+                  </Text>
+                )}
+              </View>
+            ) : null
+          }
           ListEmptyComponent={
-            <Text style={{ textAlign: "center", color: C.muted, marginTop: 60 }}>
-              {imageUri ? t("noSimilarProducts") : "Hech narsa topilmadi"}
-            </Text>
+            exactResults.length ? null : (
+              <Text style={{ textAlign: "center", color: C.muted, marginTop: 60 }}>
+                {imageUri ? t("noSimilarProducts") : "Hech narsa topilmadi"}
+              </Text>
+            )
           }
         />
       ) : (
