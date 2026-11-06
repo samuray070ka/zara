@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { C, S, R, fmt } from "@/src/lib/theme";
 import { useLang, ml } from "@/src/lib/i18n";
-import { api } from "@/src/lib/api";
+import { api, fetchProductsSafe } from "@/src/lib/api";
 import { storage } from "@/src/utils/storage";
 import { useAuth } from "@/src/lib/auth";
 import { getCurrentLocation } from "@/src/lib/geo";
@@ -143,6 +143,7 @@ function toList(r: any): any[] {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Sotuvchi mahsulotlari: qayta urinish + ochiq ro'yxat + diagnostika */
+/** Sotuvchi mahsulotlari: qayta urinish + ochiq ro'yxat + diagnostika */
 async function loadAllSellerProducts(
   sellerId?: string | null,
   onPartial?: (list: any[]) => void,
@@ -166,7 +167,7 @@ async function loadAllSellerProducts(
   };
 
   const PAGE = 30;
-  // 1) birinchi sahifa — bo'sh/xato kelsa 3 martagacha qayta uriniladi
+  // 1) birinchi sahifa — xato kelsa 3 martagacha qayta uriniladi
   let mainCount = 0;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -178,6 +179,11 @@ async function loadAllSellerProducts(
         emit();
         break;
       }
+      // bo'sh javob bo'lsa qayta urinishning ma'nosi yo'q — to'g'ridan-to'g'ri ochiq ro'yxatga o'tamiz
+      if (__DEV__ && mainCount === 0) {
+        console.log("[Seller] /seller/products bo'sh qaytardi (xato yo'q) — ochiq fallback ishga tushadi");
+      }
+      break;
     } catch (e: any) {
       lastErr = e;
       stat["seller/products"] = `xato (${e?.message || "?"})`;
@@ -202,7 +208,7 @@ async function loadAllSellerProducts(
     }
   }
 
-  // 3) ochiq ro'yxat — faqat asosiy endpoint hech narsa bermasa
+  // 3) ochiq ro'yxat — asosiy endpoint bo'sh javob qaytarsa HAM ishga tushadi
   if (sellerId && mainCount === 0) {
     let pubCount = 0;
     for (let skip = 0; skip < 2000; skip += 50) {
@@ -223,6 +229,36 @@ async function loadAllSellerProducts(
       }
     }
     if (!stat["ochiq ro'yxat"]) stat["ochiq ro'yxat"] = `${pubCount} ta`;
+  }
+
+  // 3b) oxirgi tayanich: home sahifada ishlayotgan ochiq feed'dan
+  // client tomonda seller_id bo'yicha saralab olamiz (String() bilan taqqoslaymiz)
+  if (sellerId && out.length === 0) {
+    let scanned = 0;
+    for (let skip = 0; skip < 1000; skip += 50) {
+      try {
+        const r: any = await fetchProductsSafe({ sort: "new", limit: 50, skip });
+        const list = toList(r);
+        if (!list.length) break;
+        scanned += list.length;
+        const mine = list.filter((p: any) => {
+          const ids = [p?.seller_id, p?.seller?.id, p?.store_id, p?.owner_id];
+          return ids.some((x) => x != null && String(x) === String(sellerId));
+        });
+        push(mine);
+        emit();
+        if (list.length < 50) break;
+      } catch (e: any) {
+        stat["ochiq feed"] = `xato (${e?.message || "?"})`;
+        break;
+      }
+    }
+    stat["ochiq feed filtri"] = out.length
+      ? `${out.length} ta (${scanned} ta tekshirildi)`
+      : `${scanned} ta tekshirildi, seller_id mos kelmadi`;
+    if (__DEV__) {
+      console.log(`[Seller] fallback 3b: ${stat["ochiq feed filtri"]}, sellerId=${sellerId}`);
+    }
   }
 
   // 4) lokal kesh (vaqtinchalik local-/tmp- yozuvlar o'tkazib yuboriladi)

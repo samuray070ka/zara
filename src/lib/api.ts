@@ -1,4 +1,4 @@
-const BASE = "https://zara-back.onrender.com";
+const BASE = "https://last-zara-back.fly.dev";
 
 let _token: string | null = null;
 export const setToken = (t: string | null) => {
