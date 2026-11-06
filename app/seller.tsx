@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -128,11 +128,26 @@ async function saveLastSellerCategory(categoryId: string) {
   } catch {}
 }
 
+/** Server javobi massiv yoki {items|products|results|data} bo'lishi mumkin */
+function toList(r: any): any[] {
+  if (Array.isArray(r)) return r;
+  if (!r || typeof r !== "object") return [];
+  for (const k of ["items", "products", "results", "data", "rows"]) {
+    const v = r[k];
+    if (Array.isArray(v)) return v;
+    if (v && typeof v === "object" && Array.isArray(v.items)) return v.items;
+  }
+  return [];
+}
 
-/** Sotuvchi mahsulotlari 100+ — backend limitsiz front yechim */
-async function loadAllSellerProducts(sellerId?: string | null): Promise<any[]> {
+/** Sotuvchi mahsulotlari 100+ — birinchi natija darhol ko'rsatiladi */
+async function loadAllSellerProducts(
+  sellerId?: string | null,
+  onPartial?: (list: any[]) => void
+): Promise<any[]> {
   const seen = new Set<string>();
   const out: any[] = [];
+  let lastErr: any = null;
   const push = (list: any[]) => {
     for (const p of list || []) {
       const id = String(p?.id || "");
@@ -141,52 +156,67 @@ async function loadAllSellerProducts(sellerId?: string | null): Promise<any[]> {
       out.push(p);
     }
   };
+  const emit = () => {
+    if (out.length) onPartial?.([...out]);
+  };
 
-  // 1) asosiy endpoint (odatda 100 ta)
+  // 1) asosiy endpoint — natija kelishi bilan darhol ko'rsatiladi
+  let mainCount = 0;
   try {
-    const main = await api("/seller/products");
-    push(Array.isArray(main) ? main : []);
-  } catch {}
-
-  // 2) skip/limit so'rov (agar server qabul qilsa — qo'shimcha sahifalar)
-  for (let skip = 100; skip < 2000; skip += 100) {
-    try {
-      const chunk = await api(`/seller/products?skip=${skip}&limit=100`);
-      const list = Array.isArray(chunk) ? chunk : [];
-      if (!list.length) break;
-      const before = out.length;
-      push(list);
-      if (out.length === before || list.length < 100) break;
-    } catch {
-      break;
-    }
+    const main = toList(await api("/seller/products"));
+    mainCount = main.length;
+    push(main);
+    emit();
+  } catch (e) {
+    lastErr = e;
   }
 
-  // 3) ochiq /products?seller_id= — tasdiqlanganlar, skip bilan
-  if (sellerId) {
-    for (let skip = 0; skip < 2000; skip += 50) {
+  // 2) 100 tadan ko'p bo'lsa — qo'shimcha sahifalar
+  if (mainCount >= 100) {
+    for (let skip = 100; skip < 2000; skip += 100) {
       try {
-        const r = await api(
-          `/products?seller_id=${encodeURIComponent(sellerId)}&sort=new&limit=50&skip=${skip}`
-        );
-        const list = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
+        const list = toList(await api(`/seller/products?skip=${skip}&limit=100`));
         if (!list.length) break;
+        const before = out.length;
         push(list);
-        if (list.length < 50) break;
+        emit();
+        if (out.length === before || list.length < 100) break;
       } catch {
         break;
       }
     }
   }
 
-  // 4) lokal kesh (qo'shilgan/tahrirlangan mahsulotlar saqlanadi)
+  // 3) asosiy endpoint bo'sh/xato bo'lsa yoki 100+ bo'lsa — ochiq /products?seller_id=
+  if (sellerId && (mainCount === 0 || mainCount >= 100)) {
+    for (let skip = 0; skip < 2000; skip += 50) {
+      try {
+        const r = await api(
+          `/products?seller_id=${encodeURIComponent(sellerId)}&sort=new&limit=50&skip=${skip}`
+        );
+        const list = toList(r);
+        if (!list.length) break;
+        push(list);
+        emit();
+        if (list.length < 50) break;
+      } catch (e) {
+        if (!out.length) lastErr = e;
+        break;
+      }
+    }
+  }
+
+  // 4) lokal kesh (vaqtinchalik local-/tmp- yozuvlar o'tkazib yuboriladi)
   try {
     const key = `seller_products_extra_${sellerId || "me"}`;
     const raw = await storage.getItem(key, "[]");
     const cached = JSON.parse((raw as string) || "[]");
-    if (Array.isArray(cached)) push(cached);
+    if (Array.isArray(cached)) {
+      push(cached.filter((x: any) => !/^(local|tmp)-/.test(String(x?.id || ""))));
+    }
   } catch {}
 
+  if (!out.length && lastErr) throw lastErr;
   return out;
 }
 
@@ -269,6 +299,8 @@ export default function Seller() {
   /** orderId -> { itemIndex: "accept" | "reject" } */
   const [itemDecisions, setItemDecisions] = useState<Record<string, Record<number, "accept" | "reject"> >>({});
 
+  const loadReqRef = useRef(0);
+
   const getShopLocation = async () => {
     setMsg("");
     setShopLocLoading(true);
@@ -284,22 +316,31 @@ export default function Seller() {
   };
 
   const load = useCallback(async () => {
+    const rid = ++loadReqRef.current;
+    const fresh = () => loadReqRef.current === rid;
     setLoading(true);
     try {
       await Promise.all([
-        api("/seller/stats").then((st) => st && setStats(st)).catch(() => {}),
-        loadAllSellerProducts(user?.id)
-          .then((pr) => setProducts(Array.isArray(pr) ? pr : []))
-          .catch(() => setProducts([])),
+        api("/seller/stats").then((s) => fresh() && s && setStats(s)).catch(() => {}),
+        loadAllSellerProducts(user?.id, (partial) => {
+          if (fresh()) setProducts(partial);
+        })
+          .then((pr) => {
+            if (fresh()) setProducts(Array.isArray(pr) ? pr : []);
+          })
+          .catch((e: any) => {
+            // eski ro'yxat o'chirilmaydi, sababi esa ekranda ko'rinadi
+            if (fresh()) setMsg(`Mahsulotlarni yuklab bo'lmadi: ${e?.message || "server javob bermadi"}`);
+          }),
         api("/seller/orders")
-          .then((ord) => setOrders(Array.isArray(ord) ? ord : []))
-          .catch(() => setOrders([])),
+          .then((ord) => fresh() && setOrders(toList(ord)))
+          .catch(() => fresh() && setOrders([])),
         api("/categories")
-          .then((ct) => setCats(Array.isArray(ct) ? ct : []))
+          .then((ct) => fresh() && setCats(toList(ct)))
           .catch(() => {}),
       ]);
     } finally {
-      setLoading(false);
+      if (fresh()) setLoading(false);
     }
   }, [user?.id]);
 
