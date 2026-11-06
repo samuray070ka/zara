@@ -165,11 +165,12 @@ async function loadAllSellerProducts(
     onDiag?.(Object.entries(stat).map(([k, v]) => `${k}: ${v}`).join(" • "));
   };
 
-  // 1) asosiy endpoint — bo'sh/xato kelsa 3 martagacha qayta uriniladi
+  const PAGE = 30;
+  // 1) birinchi sahifa — bo'sh/xato kelsa 3 martagacha qayta uriniladi
   let mainCount = 0;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const main = toList(await api("/seller/products"));
+      const main = toList(await api(`/seller/products?skip=0&limit=${PAGE}`));
       mainCount = main.length;
       stat["seller/products"] = `${mainCount} ta` + (attempt > 1 ? ` (${attempt}-urinish)` : "");
       if (mainCount > 0) {
@@ -185,24 +186,24 @@ async function loadAllSellerProducts(
   }
   emit();
 
-  // 2) 100 tadan ko'p bo'lsa — qo'shimcha sahifalar
-  if (mainCount >= 100) {
-    for (let skip = 100; skip < 2000; skip += 100) {
+  // 2) keyingi sahifalar (30 tadan)
+  if (mainCount >= PAGE) {
+    for (let skip = PAGE; skip < 3000; skip += PAGE) {
       try {
-        const list = toList(await api(`/seller/products?skip=${skip}&limit=100`));
+        const list = toList(await api(`/seller/products?skip=${skip}&limit=${PAGE}`));
         if (!list.length) break;
         const before = out.length;
         push(list);
         emit();
-        if (out.length === before || list.length < 100) break;
+        if (out.length === before || list.length < PAGE) break;
       } catch {
         break;
       }
     }
   }
 
-  // 3) ochiq ro'yxat (faqat tasdiqlangan va yashirilmagan mahsulotlar)
-  if (sellerId) {
+  // 3) ochiq ro'yxat — faqat asosiy endpoint hech narsa bermasa
+  if (sellerId && mainCount === 0) {
     let pubCount = 0;
     for (let skip = 0; skip < 2000; skip += 50) {
       try {
