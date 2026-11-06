@@ -140,14 +140,18 @@ function toList(r: any): any[] {
   return [];
 }
 
-/** Sotuvchi mahsulotlari 100+ — birinchi natija darhol ko'rsatiladi */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Sotuvchi mahsulotlari: qayta urinish + ochiq ro'yxat + diagnostika */
 async function loadAllSellerProducts(
   sellerId?: string | null,
-  onPartial?: (list: any[]) => void
+  onPartial?: (list: any[]) => void,
+  onDiag?: (text: string) => void
 ): Promise<any[]> {
   const seen = new Set<string>();
   const out: any[] = [];
   let lastErr: any = null;
+  const stat: Record<string, string> = {};
   const push = (list: any[]) => {
     for (const p of list || []) {
       const id = String(p?.id || "");
@@ -158,18 +162,28 @@ async function loadAllSellerProducts(
   };
   const emit = () => {
     if (out.length) onPartial?.([...out]);
+    onDiag?.(Object.entries(stat).map(([k, v]) => `${k}: ${v}`).join(" • "));
   };
 
-  // 1) asosiy endpoint — natija kelishi bilan darhol ko'rsatiladi
+  // 1) asosiy endpoint — bo'sh/xato kelsa 3 martagacha qayta uriniladi
   let mainCount = 0;
-  try {
-    const main = toList(await api("/seller/products"));
-    mainCount = main.length;
-    push(main);
-    emit();
-  } catch (e) {
-    lastErr = e;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const main = toList(await api("/seller/products"));
+      mainCount = main.length;
+      stat["seller/products"] = `${mainCount} ta` + (attempt > 1 ? ` (${attempt}-urinish)` : "");
+      if (mainCount > 0) {
+        push(main);
+        emit();
+        break;
+      }
+    } catch (e: any) {
+      lastErr = e;
+      stat["seller/products"] = `xato (${e?.message || "?"})`;
+    }
+    if (attempt < 3) await sleep(600 * attempt);
   }
+  emit();
 
   // 2) 100 tadan ko'p bo'lsa — qo'shimcha sahifalar
   if (mainCount >= 100) {
@@ -187,8 +201,9 @@ async function loadAllSellerProducts(
     }
   }
 
-  // 3) asosiy endpoint bo'sh/xato bo'lsa yoki 100+ bo'lsa — ochiq /products?seller_id=
-  if (sellerId && (mainCount === 0 || mainCount >= 100)) {
+  // 3) ochiq ro'yxat (faqat tasdiqlangan va yashirilmagan mahsulotlar)
+  if (sellerId) {
+    let pubCount = 0;
     for (let skip = 0; skip < 2000; skip += 50) {
       try {
         const r = await api(
@@ -196,14 +211,17 @@ async function loadAllSellerProducts(
         );
         const list = toList(r);
         if (!list.length) break;
+        pubCount += list.length;
         push(list);
         emit();
         if (list.length < 50) break;
-      } catch (e) {
+      } catch (e: any) {
         if (!out.length) lastErr = e;
+        stat["ochiq ro'yxat"] = `xato (${e?.message || "?"})`;
         break;
       }
     }
+    if (!stat["ochiq ro'yxat"]) stat["ochiq ro'yxat"] = `${pubCount} ta`;
   }
 
   // 4) lokal kesh (vaqtinchalik local-/tmp- yozuvlar o'tkazib yuboriladi)
@@ -212,10 +230,13 @@ async function loadAllSellerProducts(
     const raw = await storage.getItem(key, "[]");
     const cached = JSON.parse((raw as string) || "[]");
     if (Array.isArray(cached)) {
-      push(cached.filter((x: any) => !/^(local|tmp)-/.test(String(x?.id || ""))));
+      const real = cached.filter((x: any) => !/^(local|tmp)-/.test(String(x?.id || "")));
+      push(real);
+      stat["kesh"] = `${real.length} ta`;
     }
   } catch {}
 
+  emit();
   if (!out.length && lastErr) throw lastErr;
   return out;
 }
@@ -300,6 +321,7 @@ export default function Seller() {
   const [itemDecisions, setItemDecisions] = useState<Record<string, Record<number, "accept" | "reject"> >>({});
 
   const loadReqRef = useRef(0);
+  const [prodDiag, setProdDiag] = useState("");
 
   const getShopLocation = async () => {
     setMsg("");
@@ -322,9 +344,15 @@ export default function Seller() {
     try {
       await Promise.all([
         api("/seller/stats").then((s) => fresh() && s && setStats(s)).catch(() => {}),
-        loadAllSellerProducts(user?.id, (partial) => {
-          if (fresh()) setProducts(partial);
-        })
+        loadAllSellerProducts(
+          user?.id,
+          (partial) => {
+            if (fresh()) setProducts(partial);
+          },
+          (d) => {
+            if (fresh()) setProdDiag(d);
+          }
+        )
           .then((pr) => {
             if (fresh()) setProducts(Array.isArray(pr) ? pr : []);
           })
@@ -1394,7 +1422,13 @@ export default function Seller() {
               </View>
             )}
             {!loading && products.length === 0 && (
-              <Text style={st.empty}>Mahsulot yo'q. Yuqoridan qo'shing.</Text>
+              <View style={{ alignItems: "center", gap: 8 }}>
+                <Text style={st.empty}>Mahsulot yo'q. Yuqoridan qo'shing.</Text>
+                {!!prodDiag && <Text style={st.empty}>{prodDiag}</Text>}
+                <Pressable style={[st.miniBtn, { backgroundColor: C.brandDark }]} onPress={load}>
+                  <Text style={st.miniBtnTxt}>Qayta yuklash</Text>
+                </Pressable>
+              </View>
             )}
 
             {products.length > 0 && (
