@@ -5,7 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { C, S, R } from "@/src/lib/theme";
 import { useLang, ml } from "@/src/lib/i18n";
-import { api } from "@/src/lib/api";
+import { fetchProductsSafe } from "@/src/lib/api";
 import { fetchCategories, readCachedCategories } from "@/src/lib/categories";
 import ProductCard from "@/src/components/ProductCard";
 
@@ -19,6 +19,7 @@ export default function CategoryPage() {
   const [cats, setCats] = useState<any[]>([]);
   const [sub, setSub] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [title, setTitle] = useState("");
 
   const isSeller = id?.startsWith("seller-");
@@ -30,26 +31,21 @@ export default function CategoryPage() {
 
   useEffect(() => {
     let active = true;
-
     const applyCategories = (c: any[]) => {
       if (!active) return;
       setCats(c);
-      if (isAll) {
-        setTitle("Hammasi");
-      } else if (!isSeller) {
+      if (isAll) setTitle("Hammasi");
+      else if (!isSeller) {
         const cat = c.find((x: any) => x.id === id);
         if (cat) setTitle(ml(cat.name, lang));
       }
     };
-
     readCachedCategories()
       .then((cached) => {
         if (cached?.length) applyCategories(cached);
       })
       .catch(() => {});
-
     fetchCategories().then(applyCategories).catch(() => {});
-
     return () => {
       active = false;
     };
@@ -58,22 +54,37 @@ export default function CategoryPage() {
   useEffect(() => {
     let active = true;
     setLoading(true);
+    setLoadingMore(false);
     setItems([]);
     (async () => {
       try {
         const all: any[] = [];
         const seen = new Set<string>();
-        // Admin panel kabi: 10 tadan chiqadi
-        const pageSize = 10;
-        for (let skip = 0; skip < 2000; skip += pageSize) {
-          const url = isSeller
-            ? `/products?seller_id=${sellerId}&sort=mix&limit=${pageSize}&skip=${skip}`
-            : isAll
-            ? `/products?sort=mix&limit=${pageSize}&skip=${skip}`
-            : `/products?category_id=${encodeURIComponent(String(sub || id))}&sort=mix&limit=${pageSize}&skip=${skip}`;
-          const r = await api(url).catch(() => ({ items: [] }));
-          const list = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
-          if (!list.length) break;
+        const pageSize = 6;
+        let totalCount = Number.POSITIVE_INFINITY;
+        let skip = 0;
+        let emptyStreak = 0;
+        let firstBatch = true;
+
+        while (active && all.length < totalCount && skip < 2000) {
+          const r = await fetchProductsSafe({
+            sort: "new",
+            limit: pageSize,
+            skip,
+            seller_id: isSeller ? String(sellerId) : undefined,
+            category_id: !isSeller && !isAll ? String(sub || id) : undefined,
+          });
+          const list = Array.isArray(r?.items) ? r.items : [];
+          if (typeof r?.total === "number" && r.total > 0) {
+            totalCount = r.total;
+          }
+          if (!list.length) {
+            emptyStreak++;
+            if (emptyStreak >= 2) break;
+            skip += pageSize;
+            continue;
+          }
+          emptyStreak = 0;
           const before = all.length;
           for (const p of list) {
             const pid = String(p?.id || "");
@@ -81,19 +92,23 @@ export default function CategoryPage() {
             seen.add(pid);
             all.push(p);
           }
-          if (all.length === before) break;
-
           if (!active) return;
-          // Har 10 ta kelishi bilan darhol ko'rsatamiz
+
           setItems([...all]);
-          // Birinchi 10 tadan keyin asosiy loader o'chadi
-          if (all.length >= pageSize || list.length < pageSize) {
+          if (firstBatch) {
             setLoading(false);
+            firstBatch = false;
+            if (all.length < totalCount) setLoadingMore(true);
           }
+
           if (isAll) setTitle("Hammasi");
           if (isSeller && all[0]) setTitle("Do'kon");
 
-          if (list.length < pageSize) break;
+          if (all.length === before) skip += pageSize;
+          else skip = all.length;
+
+          if (all.length >= totalCount) break;
+          if (active) setLoadingMore(true);
         }
         if (!active) return;
         setItems([...all]);
@@ -102,7 +117,10 @@ export default function CategoryPage() {
       } catch {
         if (active) setItems([]);
       } finally {
-        if (active) setLoading(false);
+        if (active) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     })();
     return () => {
@@ -156,9 +174,11 @@ export default function CategoryPage() {
         </View>
       </View>
 
-      {/* Birinchi 10 ta bo'lmasa — katta loader; keyin ro'yxat + pastki loader */}
       {loading && items.length === 0 ? (
-        <ActivityIndicator size="large" color={C.brand} style={{ marginTop: 60 }} />
+        <View style={st.centerLoad}>
+          <ActivityIndicator size="large" color={C.brand} />
+          <Text style={st.loadTxt}>Mahsulotlar yuklanmoqda...</Text>
+        </View>
       ) : (
         <FlatList
           key={cols}
@@ -185,14 +205,19 @@ export default function CategoryPage() {
             </View>
           )}
           ListFooterComponent={
-            loading && items.length > 0 ? (
-              <ActivityIndicator color={C.brand} style={{ marginVertical: 16 }} />
-            ) : null
+            loadingMore ? (
+              <View style={st.footerLoad}>
+                <ActivityIndicator color={C.brand} />
+                <Text style={st.loadTxt}>Yana mahsulotlar yuklanmoqda...</Text>
+              </View>
+            ) : (
+              <View style={{ height: S.xl }} />
+            )
           }
           ListEmptyComponent={
-            <Text style={{ textAlign: "center", color: C.muted, marginTop: 60 }}>
-              Mahsulotlar yo'q
-            </Text>
+            !loading ? (
+              <Text style={{ textAlign: "center", color: C.muted, marginTop: 60 }}>Mahsulotlar yo'q</Text>
+            ) : null
           }
         />
       )}
@@ -240,4 +265,19 @@ const st = StyleSheet.create({
   },
   chipActive: { backgroundColor: C.inverse, borderColor: C.inverse },
   chipTxt: { fontSize: 13, fontWeight: "600", color: C.onTertiary },
+  centerLoad: {
+    marginTop: 60,
+    alignItems: "center",
+    gap: 12,
+  },
+  footerLoad: {
+    paddingVertical: 20,
+    alignItems: "center",
+    gap: 8,
+  },
+  loadTxt: {
+    fontSize: 13,
+    color: C.muted,
+    fontWeight: "600",
+  },
 });

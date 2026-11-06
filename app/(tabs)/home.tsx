@@ -10,13 +10,12 @@ import zarramarketLogo from "../../assets/images/zarramarket-logo.png";
 import { C, S, R } from "@/src/lib/theme";
 import { useLang, ml } from "@/src/lib/i18n";
 import { useAuth } from "@/src/lib/auth";
-import { api } from "@/src/lib/api";
+import { api, fetchProductsSafe } from "@/src/lib/api";
 import { fetchCategories, readCachedCategories } from "@/src/lib/categories";
 import ProductCard from "@/src/components/ProductCard";
 
 type FeedResponse = { items: any[]; total: number };
 
-/** Home feed xotira cache — birinchi ochilishda tez ko'rsatish */
 const _homeMem: {
   banners?: any[];
   flash?: any[];
@@ -38,6 +37,40 @@ function shuffleArray<T>(arr: T[]): T[] {
   return a;
 }
 
+const nameOf = (p: any): string => {
+  const n = p?.name ?? p?.title ?? "";
+  if (typeof n === "string") return n;
+  return String(Object.values(n || {})[0] || "");
+};
+const brandKey = (p: any) => nameOf(p).toLowerCase().trim().split(/\s+/)[0] || "";
+const catKey = (p: any) =>
+  String(p?.category_id ?? p?.category?.id ?? p?.category ?? "");
+
+/** Bir xil brend/kategoriya yonma-yon kelmasligi uchun aralashtirish */
+function spread(items: any[], windowSize: number, tail: any[] = []): any[] {
+  const pool = shuffleArray(items);
+  const out: any[] = [];
+  const recent = () => [...tail, ...out].slice(-Math.max(1, windowSize));
+  while (pool.length) {
+    const rec = recent();
+    const brands = new Set(rec.map(brandKey));
+    const cats = new Set(rec.map(catKey));
+    let best = 0;
+    let bestScore = Infinity;
+    for (let i = 0; i < pool.length; i++) {
+      const b = brandKey(pool[i]);
+      const c = catKey(pool[i]);
+      const score = (b && brands.has(b) ? 2 : 0) + (c && cats.has(c) ? 1 : 0);
+      if (score < bestScore) {
+        bestScore = score;
+        best = i;
+        if (score === 0) break;
+      }
+    }
+    out.push(pool.splice(best, 1)[0]);
+  }
+  return out;
+}
 
 function Countdown({ endsAt }: { endsAt: string }) {
   const [left, setLeft] = useState("");
@@ -48,7 +81,9 @@ function Countdown({ endsAt }: { endsAt: string }) {
       const h = Math.floor(diff / 3600000);
       const m = Math.floor((diff % 3600000) / 60000);
       const s = Math.floor((diff % 60000) / 1000);
-      setLeft(`${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`);
+      setLeft(
+        `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+      );
     };
     tick();
     const iv = setInterval(tick, 1000);
@@ -74,7 +109,11 @@ function InlineLoader({ label }: { label: string }) {
 
 function CategorySkeletons() {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.sm }}>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.sm }}
+    >
       {Array.from({ length: 8 }).map((_, idx) => (
         <View key={idx} style={st.catChip}>
           <View style={[st.catIcon, st.skeletonBlock]} />
@@ -87,9 +126,16 @@ function CategorySkeletons() {
 
 function BannerSkeletons({ width }: { width: number }) {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.md, paddingTop: S.md }}>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.md, paddingTop: S.md }}
+    >
       {Array.from({ length: 2 }).map((_, idx) => (
-        <View key={idx} style={[st.banner, st.skeletonBlock, { width: Math.min(width - S.lg * 2, 640) }]} />
+        <View
+          key={idx}
+          style={[st.banner, st.skeletonBlock, { width: Math.min(width - S.lg * 2, 640) }]}
+        />
       ))}
     </ScrollView>
   );
@@ -97,9 +143,25 @@ function BannerSkeletons({ width }: { width: number }) {
 
 function FeedSkeleton({ cols, cardW }: { cols: number; cardW: number }) {
   return (
-    <View style={{ paddingHorizontal: S.lg, maxWidth: 1200, width: "100%", alignSelf: "center", flexDirection: "row", flexWrap: "wrap" }}>
+    <View
+      style={{
+        paddingHorizontal: S.lg,
+        maxWidth: 1200,
+        width: "100%",
+        alignSelf: "center",
+        flexDirection: "row",
+        flexWrap: "wrap",
+      }}
+    >
       {Array.from({ length: cols * 2 }).map((_, index) => (
-        <View key={index} style={{ width: cardW, marginBottom: S.md, marginRight: (index + 1) % cols === 0 ? 0 : S.md }}>
+        <View
+          key={index}
+          style={{
+            width: cardW,
+            marginBottom: S.md,
+            marginRight: (index + 1) % cols === 0 ? 0 : S.md,
+          }}
+        >
           <View style={st.feedSkeletonCard}>
             <View style={[st.feedSkeletonImage, st.skeletonBlock]} />
             <View style={[st.skeletonLine, { width: "88%", marginTop: S.sm }]} />
@@ -131,21 +193,20 @@ export default function Home() {
   const [flashLoading, setFlashLoading] = useState(true);
   const [recsLoading, setRecsLoading] = useState(true);
   const [feedLoading, setFeedLoading] = useState(true);
-  const skipRef = useRef(0);
+  const pagesRef = useRef<number[]>([]); // hali olinmagan tasodifiy sahifalar
+  const colsRef = useRef(2);
   const requestRef = useRef(0);
 
   const cols = Math.min(6, Math.max(2, Math.floor(width / 220)));
   const cardW = (Math.min(width, 1200) - S.lg * 2 - S.md * (cols - 1)) / cols;
+  colsRef.current = cols;
 
   const load = useCallback(async () => {
     const requestId = ++requestRef.current;
 
-    // Cache'dan darhol ko'rsatish (skeleton kutmasdan)
-    const fresh = Date.now() - _homeMem.at < HOME_MEM_TTL_MS;
     if (_homeMem.feed?.length) {
       setFeed(_homeMem.feed);
       setTotal(_homeMem.total || 0);
-      skipRef.current = _homeMem.feed.length;
       setFeedLoading(false);
     } else {
       setFeedLoading(true);
@@ -210,113 +271,137 @@ export default function Home() {
         )
         .catch(() => safe(() => setRecs([])))
         .finally(() => safe(() => setRecsLoading(false))),
-      api("/products?sort=mix&limit=40&skip=0")
-        .then((data: FeedResponse) =>
-          safe(() => {
-            const items = shuffleArray(Array.isArray(data?.items) ? data.items : []);
-            setFeed(items);
-            setTotal(Number(data?.total || 0));
-            skipRef.current = items.length;
-            _homeMem.feed = items;
-            _homeMem.total = Number(data?.total || 0);
-            _homeMem.at = Date.now();
-          })
-        )
-        .catch(() =>
+      // TEZ: birinchi 10 ta darhol, keyin tasodifiy sahifalar parallel
+      (async () => {
+        try {
+          const pageSize = 10;
+          const seen = new Set<string>();
+          let acc: any[] = [];
+          let totalCount = 0;
+
+          const fetchPage = (page: number) =>
+            fetchProductsSafe({ sort: "new", limit: pageSize, skip: page * pageSize });
+
+          const apply = (batch: any[]) => {
+            const fresh = batch.filter((p) => {
+              const id = String(p?.id || "");
+              if (!id || seen.has(id)) return false;
+              seen.add(id);
+              return true;
+            });
+            if (!fresh.length) return;
+            acc = [...acc, ...spread(fresh, colsRef.current, acc.slice(-colsRef.current))];
+            const snapshot = acc;
+            safe(() => {
+              setFeed(snapshot);
+              setTotal(totalCount || snapshot.length);
+              setFeedLoading(false);
+            });
+            if (requestRef.current === requestId) {
+              _homeMem.feed = snapshot;
+              _homeMem.total = totalCount || snapshot.length;
+              _homeMem.at = Date.now();
+            }
+          };
+
+          // 1) Birinchi 10 ta — darhol ko'rinadi
+          const first = await fetchPage(0);
+          if (requestRef.current !== requestId) return;
+          totalCount = Number(first?.total) || 0;
+          const firstItems = Array.isArray(first?.items) ? first.items : [];
+          apply(firstItems);
+          safe(() => setFeedLoading(false));
+
+          if (!firstItems.length && !_homeMem.feed?.length) {
+            safe(() => {
+              setFeed([]);
+              setTotal(0);
+            });
+            return;
+          }
+
+          // 2) Qolgan sahifalar tasodifiy tartibda
+          const pages = Math.max(1, Math.ceil(totalCount / pageSize));
+          const rest = shuffleArray(Array.from({ length: pages - 1 }, (_, i) => i + 1));
+          const initial = rest.splice(0, 3); // 3 ta tasodifiy sahifa parallel
+          pagesRef.current = rest; // qolgani loadMore uchun
+
+          await Promise.all(
+            initial.map((pg) =>
+              fetchPage(pg)
+                .then((d) => {
+                  if (requestRef.current !== requestId) return;
+                  apply(Array.isArray(d?.items) ? d.items : []);
+                })
+                .catch(() => {})
+            )
+          );
+        } catch {
           safe(() => {
             if (!_homeMem.feed?.length) {
               setFeed([]);
               setTotal(0);
-              skipRef.current = 0;
             }
-          })
-        )
-        .finally(() => safe(() => setFeedLoading(false))),
+          });
+        } finally {
+          safe(() => setFeedLoading(false));
+        }
+      })(),
     ];
 
     await Promise.allSettled(tasks);
     safe(() => setRefreshing(false));
   }, [token]);
 
-  // Home.tsx ichida, load dan keyin qo‘shing
-useEffect(() => {
-  if (feed.length === 0 || recs.length === 0) return;
-
-  setFeed((prev) =>
-    prev.map((item) => {
-      const hasImage =
-        (Array.isArray(item.images) && item.images.length > 0) ||
-        !!item.image ||
-        !!item.preview_image;
-
-      if (hasImage) return item;
-
-      const fromRecs = recs.find((r) => r.id === item.id);
-      if (!fromRecs) return item;
-
-      return {
-        ...item,
-        images: fromRecs.images?.length
-          ? fromRecs.images
-          : fromRecs.image
-          ? [fromRecs.image]
-          : item.images,
-        image: fromRecs.image || fromRecs.images?.[0] || item.image,
-        preview_image: fromRecs.preview_image || item.preview_image,
-      };
-    })
-  );
-}, [recs]); // faqat recs o‘zgarganda
   useEffect(() => {
-    readCachedCategories().then((cached) => {
-      if (!cached?.length) return;
-      setCats(cached.filter((x: any) => !x.parent_id));
-      setCatsLoading(false);
-    }).catch(() => {});
+    if (!feed.length || !recs.length) return;
+    setFeed((prev) => {
+      let changed = false;
+      const next = prev.map((item) => {
+        const img0 = Array.isArray(item.images) ? item.images[0] : item.images;
+        const hasRealImage = typeof img0 === "string" && img0.trim().length > 10;
+        if (hasRealImage) return item;
+        const fromRecs = recs.find((r) => r.id === item.id);
+        if (!fromRecs) return item;
+        const recImg = Array.isArray(fromRecs.images) ? fromRecs.images[0] : fromRecs.images;
+        if (!recImg || (typeof recImg === "string" && recImg.trim().length < 10)) return item;
+        changed = true;
+        return {
+          ...item,
+          images: fromRecs.images?.length ? fromRecs.images : [recImg],
+          image: fromRecs.image || recImg,
+        };
+      });
+      return changed ? next : prev;
+    });
+  }, [recs, feed.length]);
+
+  useEffect(() => {
+    readCachedCategories()
+      .then((cached) => {
+        if (!cached?.length) return;
+        setCats(cached.filter((x: any) => !x.parent_id));
+        setCatsLoading(false);
+      })
+      .catch(() => {});
     load();
   }, [load]);
 
-  // Feed da rasm bo‘sh bo‘lsa — tavsiyalardan olish
-useEffect(() => {
-  if (!feed.length || !recs.length) return;
-
-  setFeed((prev) => {
-    let changed = false;
-    const next = prev.map((item) => {
-      const img0 = Array.isArray(item.images) ? item.images[0] : item.images;
-      const hasRealImage = typeof img0 === "string" && img0.trim().length > 10;
-
-      if (hasRealImage) return item;
-
-      const fromRecs = recs.find((r) => r.id === item.id);
-      if (!fromRecs) return item;
-
-      const recImg = Array.isArray(fromRecs.images) ? fromRecs.images[0] : fromRecs.images;
-      if (!recImg || (typeof recImg === "string" && recImg.trim().length < 10)) return item;
-
-      changed = true;
-      return {
-        ...item,
-        images: fromRecs.images?.length ? fromRecs.images : [recImg],
-        image: fromRecs.image || recImg,
-      };
-    });
-
-    return changed ? next : prev;
-  });
-}, [recs, feed.length]); // feed.length — faqat birinchi yuklanganda
   const loadMore = async () => {
-    if (loadingMore || feedLoading || feed.length >= total) return;
+    if (loadingMore || feedLoading) return;
+    const pg = pagesRef.current.shift();
+    if (pg === undefined) return;
     setLoadingMore(true);
     try {
-      const p = await api(`/products?sort=mix&limit=20&skip=${skipRef.current}`);
-      const more = shuffleArray(p.items || []);
+      const p = await fetchProductsSafe({ sort: "new", limit: 10, skip: pg * 10 });
+      const more = Array.isArray(p?.items) ? p.items : [];
       setFeed((prev) => {
-        const seen = new Set(prev.map((x: any) => x.id));
-        const unique = more.filter((x: any) => x?.id && !seen.has(x.id));
-        return shuffleArray([...prev, ...unique]);
+        const seen = new Set(prev.map((x: any) => String(x.id)));
+        const unique = more.filter((x: any) => x?.id && !seen.has(String(x.id)));
+        if (!unique.length) return prev;
+        return [...prev, ...spread(unique, colsRef.current, prev.slice(-colsRef.current))];
       });
-      skipRef.current += (p.items || []).length;
+      if (p?.total) setTotal(Number(p.total));
     } catch {}
     setLoadingMore(false);
   };
@@ -325,17 +410,24 @@ useEffect(() => {
     if (b.link_type === "category" && b.link_id) router.push(`/category/${b.link_id}`);
     else if (b.link_type === "product" && b.link_id) router.push(`/product/${b.link_id}`);
   };
-console.log("FEED[0]:", JSON.stringify(feed[0], null, 2));
-console.log("RECS[0]:", JSON.stringify(recs[0], null, 2));
+
   const header = (
     <View style={{ maxWidth: 1200, width: "100%", alignSelf: "center" }}>
       {bannersLoading && banners.length === 0 ? (
         <BannerSkeletons width={width} />
       ) : (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.md, paddingTop: S.md }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.md, paddingTop: S.md }}
+        >
           {banners.map((b, i) => (
             <Animated.View key={b.id} entering={FadeInDown.delay(i * 100).springify()}>
-              <Pressable testID={`banner-${i}`} onPress={() => onBanner(b)} style={[st.banner, { width: Math.min(width - S.lg * 2, 640) }]}>
+              <Pressable
+                testID={`banner-${i}`}
+                onPress={() => onBanner(b)}
+                style={[st.banner, { width: Math.min(width - S.lg * 2, 640) }]}
+              >
                 <Image source={{ uri: b.image }} style={StyleSheet.absoluteFill} contentFit="cover" transition={300} />
                 <LinearGradient colors={["transparent", "rgba(3,7,18,0.85)"]} style={StyleSheet.absoluteFill} />
                 <Text style={st.bannerTitle}>{b.title}</Text>
@@ -349,11 +441,20 @@ console.log("RECS[0]:", JSON.stringify(recs[0], null, 2));
       {catsLoading && cats.length === 0 ? (
         <CategorySkeletons />
       ) : cats.length ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.sm }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.sm }}
+        >
           {cats.map((c) => {
             const catImg = c.preview_image || (c as any).image;
             return (
-              <Pressable key={c.id} testID={`category-chip-${c.id}`} style={st.catChip} onPress={() => router.push(`/category/${c.id}`)}>
+              <Pressable
+                key={c.id}
+                testID={`category-chip-${c.id}`}
+                style={st.catChip}
+                onPress={() => router.push(`/category/${c.id}`)}
+              >
                 <View style={st.catIcon}>
                   {catImg ? (
                     <Image source={{ uri: catImg }} style={st.catImage} contentFit="cover" />
@@ -382,7 +483,11 @@ console.log("RECS[0]:", JSON.stringify(recs[0], null, 2));
             </View>
             <Countdown endsAt={flash[0].flash_sale.ends_at} />
           </View>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: S.md, gap: S.md, paddingBottom: S.md }}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: S.md, gap: S.md, paddingBottom: S.md }}
+          >
             {flash.map((p, i) => (
               <ProductCard key={p.id} product={p} index={i} width={160} />
             ))}
@@ -395,7 +500,11 @@ console.log("RECS[0]:", JSON.stringify(recs[0], null, 2));
       ) : recs.length > 0 ? (
         <>
           <Text style={st.sectionTitle}>✨ {t("forYou")}</Text>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.md }}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ paddingHorizontal: S.lg, gap: S.md }}
+          >
             {recs.map((p, i) => (
               <ProductCard key={p.id} product={p} index={i} width={160} />
             ))}
@@ -426,7 +535,11 @@ console.log("RECS[0]:", JSON.stringify(recs[0], null, 2));
           >
             <Ionicons name="camera-outline" size={20} color={C.brandDark} />
           </Pressable>
-          <Pressable testID="home-notifications-button" style={st.iconBtn} onPress={() => router.push(token ? "/notifications" : "/auth")}>
+          <Pressable
+            testID="home-notifications-button"
+            style={st.iconBtn}
+            onPress={() => router.push(token ? "/notifications" : "/auth")}
+          >
             <Ionicons name="notifications-outline" size={22} color={C.onSurface} />
           </Pressable>
         </View>
@@ -439,21 +552,44 @@ console.log("RECS[0]:", JSON.stringify(recs[0], null, 2));
         keyExtractor={(p, index) => p?.id || `feed-${index}`}
         numColumns={cols}
         renderItem={({ item, index }) => (
-          <View style={{ width: cardW, marginBottom: S.md, marginRight: (index + 1) % cols === 0 ? 0 : S.md }}>
-            <ProductCard 
-              product={item} 
-              index={index % cols} 
-              width={cardW}
-            />
+          <View
+            style={{
+              width: cardW,
+              marginBottom: S.md,
+              marginRight: (index + 1) % cols === 0 ? 0 : S.md,
+            }}
+          >
+            <ProductCard product={item} index={index % cols} width={cardW} />
           </View>
         )}
-        columnWrapperStyle={feed.length ? { paddingHorizontal: S.lg, maxWidth: 1200, alignSelf: "center", width: "100%" } : undefined}
+        columnWrapperStyle={
+          feed.length
+            ? { paddingHorizontal: S.lg, maxWidth: 1200, alignSelf: "center", width: "100%" }
+            : undefined
+        }
         ListHeaderComponent={header}
-        ListEmptyComponent={feedLoading ? <FeedSkeleton cols={cols} cardW={cardW} /> : <InlineLoader label="Mahsulot topilmadi" />}
+        ListEmptyComponent={
+          feedLoading ? <FeedSkeleton cols={cols} cardW={cardW} /> : <InlineLoader label="Mahsulot topilmadi" />
+        }
         onEndReached={loadMore}
         onEndReachedThreshold={0.4}
-        ListFooterComponent={loadingMore ? <ActivityIndicator color={C.brand} style={{ marginVertical: S.lg }} /> : <View style={{ height: S.xl }} />}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); load(); }} tintColor={C.brand} />}
+        ListFooterComponent={
+          loadingMore ? (
+            <ActivityIndicator color={C.brand} style={{ marginVertical: S.lg }} />
+          ) : (
+            <View style={{ height: S.xl }} />
+          )
+        }
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              load();
+            }}
+            tintColor={C.brand}
+          />
+        }
         showsVerticalScrollIndicator={false}
       />
     </View>
@@ -462,12 +598,34 @@ console.log("RECS[0]:", JSON.stringify(recs[0], null, 2));
 
 const st = StyleSheet.create({
   root: { flex: 1, backgroundColor: C.surface },
-  topBar: { backgroundColor: C.card, borderBottomWidth: 1, borderBottomColor: C.border, paddingVertical: S.sm },
-  topInner: { flexDirection: "row", alignItems: "center", gap: S.md, paddingHorizontal: S.lg, maxWidth: 1200, width: "100%", alignSelf: "center" },
+  topBar: {
+    backgroundColor: C.card,
+    borderBottomWidth: 1,
+    borderBottomColor: C.border,
+    paddingVertical: S.sm,
+  },
+  topInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: S.md,
+    paddingHorizontal: S.lg,
+    maxWidth: 1200,
+    width: "100%",
+    alignSelf: "center",
+  },
   logoRow: { flexDirection: "row", alignItems: "center", gap: 10 },
-  logoImg: { width: 48, height: 48, borderRadius: 12 },   // ← logo kattalashtirildi
+  logoImg: { width: 48, height: 48, borderRadius: 12 },
   logoTxt: { fontSize: 20, fontWeight: "900", color: C.onSurface, letterSpacing: -0.5 },
-  searchBar: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8, backgroundColor: C.tertiary, borderRadius: R.pill, paddingHorizontal: S.lg, height: 42 },
+  searchBar: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: C.tertiary,
+    borderRadius: R.pill,
+    paddingHorizontal: S.lg,
+    height: 42,
+  },
   searchTxt: { color: C.muted, fontSize: 14 },
   imageSearchBtn: {
     width: 42,
@@ -479,24 +637,83 @@ const st = StyleSheet.create({
     borderWidth: 1,
     borderColor: C.brandSoft,
   },
-  iconBtn: { width: 42, height: 42, borderRadius: R.pill, backgroundColor: C.tertiary, alignItems: "center", justifyContent: "center" },
-  banner: { height: 170, borderRadius: R.lg, overflow: "hidden", justifyContent: "flex-end", padding: S.lg },
+  iconBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: R.pill,
+    backgroundColor: C.tertiary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  banner: {
+    height: 170,
+    borderRadius: R.lg,
+    overflow: "hidden",
+    justifyContent: "flex-end",
+    padding: S.lg,
+  },
   bannerTitle: { color: "#fff", fontSize: 18, fontWeight: "900", maxWidth: 420 },
-  sectionTitle: { fontSize: 18, fontWeight: "900", color: C.onSurface, paddingHorizontal: S.lg, marginTop: S.xl, marginBottom: S.md },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: "900",
+    color: C.onSurface,
+    paddingHorizontal: S.lg,
+    marginTop: S.xl,
+    marginBottom: S.md,
+  },
   catChip: { alignItems: "center", gap: 6, width: 76, flexShrink: 0 },
-  catIcon: { width: 56, height: 56, borderRadius: 18, backgroundColor: C.brandTint, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: C.brandSoft, overflow: "hidden" },
+  catIcon: {
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    backgroundColor: C.brandTint,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: C.brandSoft,
+    overflow: "hidden",
+  },
   catImage: { width: "100%", height: "100%" },
   catTxt: { fontSize: 11, color: C.onTertiary, fontWeight: "600", textAlign: "center" },
   flashBlock: { marginHorizontal: S.lg, marginTop: S.xl, borderRadius: R.lg, overflow: "hidden" },
-  flashHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: S.md },
+  flashHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: S.md,
+  },
   flashTitle: { color: "#fff", fontSize: 17, fontWeight: "900" },
-  timer: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: "rgba(220,38,38,0.9)", borderRadius: R.pill, paddingHorizontal: 10, paddingVertical: 5 },
+  timer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(220,38,38,0.9)",
+    borderRadius: R.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
   timerTxt: { color: "#fff", fontWeight: "800", fontSize: 13, fontVariant: ["tabular-nums"] },
-  inlineLoader: { marginHorizontal: S.lg, backgroundColor: C.card, borderRadius: R.md, borderWidth: 1, borderColor: C.border, padding: S.lg, alignItems: "center", gap: 8 },
+  inlineLoader: {
+    marginHorizontal: S.lg,
+    backgroundColor: C.card,
+    borderRadius: R.md,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: S.lg,
+    alignItems: "center",
+    gap: 8,
+  },
   inlineLoaderTitle: { fontSize: 14, fontWeight: "900", color: C.onSurface, textAlign: "center" },
   inlineLoaderHint: { fontSize: 12, color: C.muted, textAlign: "center" },
   skeletonBlock: { backgroundColor: "#E5E7EB" },
   skeletonLine: { height: 10, borderRadius: R.pill, backgroundColor: "#E5E7EB" },
-  feedSkeletonCard: { backgroundColor: C.card, borderRadius: R.md, borderWidth: 1, borderColor: C.border, padding: S.sm, overflow: "hidden" },
+  feedSkeletonCard: {
+    backgroundColor: C.card,
+    borderRadius: R.md,
+    borderWidth: 1,
+    borderColor: C.border,
+    padding: S.sm,
+    overflow: "hidden",
+  },
   feedSkeletonImage: { width: "100%", aspectRatio: 1, borderRadius: R.md },
 });
