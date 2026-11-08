@@ -26,6 +26,25 @@ import ExactMatchCard from "@/src/lib/ExactMatchCard";
 import ProductCard from "@/src/components/ProductCard";
 
 
+/** Solishtirish uchun matnni yagona ko'rinishga keltirish:
+ *  kichik harf, apostrof turlari (ʻ ' ` ‘ ’) bittaga, kirill → lotin */
+const CYR_MAP: Record<string, string> = {
+  а: "a", б: "b", в: "v", г: "g", ғ: "g'", д: "d", е: "e", ё: "yo", ж: "j",
+  з: "z", и: "i", й: "y", к: "k", қ: "q", л: "l", м: "m", н: "n", о: "o",
+  п: "p", р: "r", с: "s", т: "t", у: "u", ў: "o'", ф: "f", х: "x", ҳ: "h",
+  ц: "ts", ч: "ch", ш: "sh", щ: "sh", ъ: "", ы: "i", ь: "", э: "e",
+  ю: "yu", я: "ya",
+};
+
+function normText(s: any): string {
+  let t = String(s ?? "").toLowerCase();
+  t = t.replace(/[ʻʼʽ‘’´`']/g, "'");
+  let out = "";
+  for (const ch of t) out += CYR_MAP[ch] ?? ch;
+  // apostroflarsiz solishtiramiz: "to'quv" = "toʻquv" = "тўқув" = "toquv"
+  return out.split("'").join("").replace(/\s+/g, " ").trim();
+}
+
 function productTextBlob(p: any): string {
   const parts: string[] = [];
   const n = p?.name;
@@ -41,11 +60,11 @@ function productTextBlob(p: any): string {
   if (p?.brand) parts.push(String(p.brand));
   if (p?.search_text) parts.push(String(p.search_text));
   if (Array.isArray(p?.tags)) parts.push(p.tags.join(" "));
-  return parts.join(" ").toLowerCase();
+  return normText(parts.join(" "));
 }
 
 function productMatchesQuery(p: any, query: string): boolean {
-  const q = query.trim().toLowerCase();
+  const q = normText(query);
   if (!q) return true;
   const blob = productTextBlob(p);
   const tokens = q.split(/\s+/).filter(Boolean);
@@ -53,7 +72,8 @@ function productMatchesQuery(p: any, query: string): boolean {
   return tokens.every((t) => blob.includes(t));
 }
 
-async function fetchProductsClientFilter(query: string): Promise<any[]> {
+/** To'liq katalog — fallback uchun sahifa-sahifa (bu yerda filtr qo'llanmaydi) */
+async function fetchAllCatalog(): Promise<any[]> {
   // Barcha mos mahsulotlar — skip bilan sahifa-sahifa
   const seen = new Set<string>();
   const all: any[] = [];
@@ -72,7 +92,7 @@ async function fetchProductsClientFilter(query: string): Promise<any[]> {
     }
     if (all.length === before || items.length < pageSize) break;
   }
-  return all.filter((p) => productMatchesQuery(p, query));
+  return all;
 }
 
 
@@ -97,6 +117,10 @@ export default function Search() {
   const [imageError, setImageError] = useState("");
   const debounce = useRef<any>(null);
   const autoImageStarted = useRef(false);
+  // Eskirgan qidiruv javoblari natijani yozib qo'ymasligi uchun ketma-ketlik raqami
+  const searchReqRef = useRef(0);
+  // To'liq katalog keshi — har yozishda qayta yuklanmasligi uchun
+  const catalogRef = useRef<{ at: number; items: any[] } | null>(null);
 
   const cols = Math.min(6, Math.max(2, Math.floor(width / 220)));
   const cardW = (Math.min(width, 1200) - S.lg * 2 - S.md * (cols - 1)) / cols;
@@ -115,10 +139,13 @@ export default function Search() {
   const doSearch = async (term?: string, opts?: { silentHist?: boolean }) => {
     const query = String(term ?? q ?? "").trim();
     if (!query) return;
+    const rid = ++searchReqRef.current;
+    const fresh = () => searchReqRef.current === rid;
     setImageUri(null);
     setImageError("");
     setLoading(true);
     setSearched(true);
+    setExactResults([]);
     if (term != null) setQ(String(term));
     if (!opts?.silentHist) {
       const newHist = [query, ...history.filter((h) => h !== query)].slice(0, 8);
@@ -126,10 +153,11 @@ export default function Search() {
       storage.setItem("search_history", JSON.stringify(newHist)).catch(() => {});
     }
     try {
-      // 1) API search (barcha sahifalar)
+      // 1) API search (barcha sahifalar) — yangi qidiruv boshlansa darhol to'xtaydi
       const apiItems: any[] = [];
       const apiSeen = new Set<string>();
       for (let skip = 0; skip < 2000; skip += 50) {
+        if (!fresh()) return;
         let url = `/products?search=${encodeURIComponent(query)}&sort=mix&limit=50&skip=${skip}`;
         if (minP) url += `&min_price=${encodeURIComponent(minP)}`;
         if (maxP) url += `&max_price=${encodeURIComponent(maxP)}`;
@@ -149,28 +177,55 @@ export default function Search() {
           break;
         }
       }
-      // 2) Frontend filtr — backend topmasa ham
-      const local = await fetchProductsClientFilter(query);
-      const map = new Map<string, any>();
-      for (const it of [...local, ...apiItems]) {
-        if (it?.id) map.set(it.id, it);
+      if (!fresh()) return;
+
+      let items: any[] = [];
+      // 2) API natijalarini client tomonda ham aniq saralaymiz
+      const filteredApi = apiItems.filter((p) => productMatchesQuery(p, query));
+      if (filteredApi.length) items = filteredApi;
+      else if (apiItems.length) items = apiItems; // server topganini client filtri o'chirib yubormasin
+
+      if (items.length) {
+        // narx filtri — server qo'llamagan bo'lishi mumkin, client tomonda ham qo'llaymiz
+        if (minP) {
+          const mn = Number(minP);
+          if (!Number.isNaN(mn)) items = items.filter((p) => Number(p.price ?? p.display_price ?? 0) >= mn);
+        }
+        if (maxP) {
+          const mx = Number(maxP);
+          if (!Number.isNaN(mx)) items = items.filter((p) => Number(p.price ?? p.display_price ?? 0) <= mx);
+        }
+      } else {
+        // 3) Fallback: API hech narsa bermasa — to'liq katalog (60s kesh) client filtrdan o'tadi
+        let catalog: any[] | null = null;
+        if (catalogRef.current && Date.now() - catalogRef.current.at < 60_000) {
+          catalog = catalogRef.current.items;
+        } else {
+          const fetched = await fetchAllCatalog();
+          if (!fresh()) return;
+          catalogRef.current = { at: Date.now(), items: fetched };
+          catalog = fetched;
+        }
+        let local = catalog.filter((p) => productMatchesQuery(p, query));
+        if (minP) {
+          const mn = Number(minP);
+          if (!Number.isNaN(mn)) local = local.filter((p) => Number(p.price ?? p.display_price ?? 0) >= mn);
+        }
+        if (maxP) {
+          const mx = Number(maxP);
+          if (!Number.isNaN(mx)) local = local.filter((p) => Number(p.price ?? p.display_price ?? 0) <= mx);
+        }
+        items = local;
       }
-      let items = Array.from(map.values()).filter((p) => productMatchesQuery(p, query));
-      if (minP) {
-        const mn = Number(minP);
-        if (!Number.isNaN(mn)) items = items.filter((p) => Number(p.price ?? p.display_price ?? 0) >= mn);
-      }
-      if (maxP) {
-        const mx = Number(maxP);
-        if (!Number.isNaN(mx)) items = items.filter((p) => Number(p.price ?? p.display_price ?? 0) <= mx);
-      }
+      if (!fresh()) return;
       setResults(items);
     } catch (e) {
+      if (!fresh()) return;
       console.warn("text search failed", e);
       setResults([]);
-    setExactResults([]);
+      setExactResults([]);
     } finally {
-      setLoading(false);
+      if (fresh()) setLoading(false);
     }
   };
 
@@ -183,7 +238,7 @@ export default function Search() {
       if (!imageUri) {
         setSearched(false);
         setResults([]);
-    setExactResults([]);
+        setExactResults([]);
       }
       return;
     }
@@ -338,10 +393,11 @@ export default function Search() {
             <Pressable
               testID="search-clear-button"
               onPress={() => {
+                searchReqRef.current++; // davom etayotgan qidiruvni bekor qilamiz
                 setQ("");
                 setSearched(false);
                 setResults([]);
-    setExactResults([]);
+                setExactResults([]);
                 setImageUri(null);
                 setImageError("");
               }}

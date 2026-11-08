@@ -9,23 +9,23 @@ type CachePayload = { at: number; data: OrderLite[] };
 const memory = new Map<string, CachePayload>();
 const pending = new Map<string, Promise<OrderLite[]>>();
 
-
-function slimOrders(list: any[]): any[] {
+/**
+ * Faqat AsyncStorage uchun — katta base64 ni qisqartiramiz (quota).
+ * Xotirada to'liq rasm saqlanadi, UI to'g'ri ko'rsatadi.
+ */
+function slimOrdersForStorage(list: any[]): any[] {
   return (list || []).map((o) => {
     if (!o || typeof o !== "object") return o;
     const items = Array.isArray(o.items)
       ? o.items.map((it: any) => {
           const img = typeof it?.image === "string" ? it.image : "";
-          // Ro'yxat uchun: http va o'rtacha base64 thumb saqlanadi
-          const keep =
-            img.startsWith("http://") || img.startsWith("https://")
-              ? img
-              : img.startsWith("data:") && img.length > 12000
-              ? ""
-              : img.length > 12000
-              ? ""
-              : img;
-          return { ...it, image: keep };
+          if (img.startsWith("http://") || img.startsWith("https://")) {
+            return { ...it, image: img };
+          }
+          if (img.startsWith("data:") && img.length <= 8000) {
+            return { ...it, image: img };
+          }
+          return { ...it, image: "" };
         })
       : o.items;
     return { ...o, items };
@@ -47,7 +47,6 @@ export async function readCachedOrders(token: string): Promise<OrderLite[] | nul
     if (!Array.isArray(parsed?.data) || !parsed.data.length || !isFresh(Number(parsed?.at || 0))) {
       return null;
     }
-    memory.set(token, { at: Number(parsed.at || 0), data: parsed.data });
     return parsed.data;
   } catch {
     return null;
@@ -61,13 +60,16 @@ export async function fetchOrders(token: string, force = false): Promise<OrderLi
 
   const req = api("/orders/my")
     .then(async (data) => {
-      const list = slimOrders(Array.isArray(data) ? data : []);
+      const list = Array.isArray(data) ? data : [];
       const payload = { at: Date.now(), data: list };
       memory.set(token, payload);
       try {
-        await storage.setItem(cacheKey(token), JSON.stringify(payload));
+        await storage.setItem(
+          cacheKey(token),
+          JSON.stringify({ at: payload.at, data: slimOrdersForStorage(list) })
+        );
       } catch {
-        // quota — faqat xotirada qoldiramiz
+        // quota — faqat xotirada
       }
       return list;
     })
