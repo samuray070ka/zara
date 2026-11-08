@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { C, S, R, fmt } from "@/src/lib/theme";
 import { useLang, ml } from "@/src/lib/i18n";
 import { api } from "@/src/lib/api";
+import { storage } from "@/src/utils/storage";
 import { EmptyState, SectionLoader } from "@/src/components/SectionState";
 import { searchByImage, pickerAssetToUri } from "@/src/lib/imageSearch";
 
@@ -226,6 +227,56 @@ async function enrichAdminProductList(list: any[]): Promise<any[]> {
 }
 
 
+
+/** Sotuvchi o'chirgan / yashirgan mahsulotlarni moderatsiyada ko'rsatmaslik */
+/** Sotuvchi o'chirgan mahsulot ID lari (local + storage) */
+let _deletedIdsCache: Set<string> = new Set();
+let _deletedIdsAt = 0;
+
+function readDeletedIdsSync(): Set<string> {
+  const set = new Set<string>();
+  try {
+    const raw = globalThis?.localStorage?.getItem?.("zarram_deleted_product_ids");
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr)) arr.forEach((x) => set.add(String(x)));
+    }
+  } catch {}
+  // merge with memory cache
+  _deletedIdsCache.forEach((x) => set.add(x));
+  return set;
+}
+
+async function refreshDeletedIds(): Promise<Set<string>> {
+  const set = readDeletedIdsSync();
+  try {
+    const raw = await storage.getItem("zarram_deleted_product_ids", "[]");
+    const arr = JSON.parse((raw as string) || "[]");
+    if (Array.isArray(arr)) arr.forEach((x: any) => set.add(String(x)));
+  } catch {}
+  _deletedIdsCache = set;
+  _deletedIdsAt = Date.now();
+  return set;
+}
+
+function isProductGone(p: any): boolean {
+  if (!p) return true;
+  if (p.status === "deleted" || p.status === "removed") return true;
+  if (p.hidden === true || p.is_hidden === true) return true;
+  if (p.deleted === true || p.is_deleted === true) return true;
+  const id = String(p.id || p._id || "");
+  if (!id) return false;
+  if (_deletedIdsCache.has(id)) return true;
+  try {
+    const raw = globalThis?.localStorage?.getItem?.("zarram_deleted_product_ids");
+    if (raw) {
+      const arr = JSON.parse(raw);
+      if (Array.isArray(arr) && arr.map(String).includes(id)) return true;
+    }
+  } catch {}
+  return false;
+}
+
 export default function Admin() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -245,7 +296,7 @@ export default function Admin() {
   const [sms, setSms] = useState<any[]>([]);
   const [mapData, setMapData] = useState<any>({ markers: [], counts: {} });
   const [settings, setSettings] = useState<any>({});
-const [prodFilter, setProdFilter] = useState("");
+const [prodFilter, setProdFilter] = useState("pending");
 const [prodSearch, setProdSearch] = useState("");
 const [prodImageSearch, setProdImageSearch] = useState(false);
 const [prodImageUri, setProdImageUri] = useState<string | null>(null);
@@ -314,6 +365,9 @@ const [dashboardResetConfirmText, setDashboardResetConfirmText] = useState("");
         if (alive()) setOrders(Array.isArray(data) ? data : []);
       }
       if (s === "products" || s === "flash") {
+        // Sotuvchi o'chirgan ID larni yangilash
+        try { await refreshDeletedIds(); } catch {}
+
         // 10 tadan chiqaramiz — birinchi 10 darhol, keyin qolganlari
         const pageSize = 100;
         const statusPart =
@@ -372,6 +426,7 @@ const [dashboardResetConfirmText, setDashboardResetConfirmText] = useState("");
           for (const p of list) {
             const id = String(p?.id || "");
             if (!id || seen.has(id)) continue;
+            if (isProductGone(p)) continue;
             seen.add(id);
             all.push(p);
           }
@@ -771,11 +826,48 @@ const productSearchBlob = (p: any) => {
   return parts.join(" ").toLowerCase();
 };
 
+
+  // Moderatsiyada o'chirilgan mahsulotlarni yashirish (sotuvchi o'chirganda)
+  useEffect(() => {
+    if (sec !== "products") return;
+    let alive = true;
+    (async () => {
+      await refreshDeletedIds();
+      if (!alive) return;
+      setProducts((prev) => {
+        if (!Array.isArray(prev) || !prev.length) return prev;
+        const next = prev.filter((p) => !isProductGone(p));
+        return next.length === prev.length ? prev : next;
+      });
+    })();
+    const t = setInterval(async () => {
+      await refreshDeletedIds();
+      if (!alive) return;
+      setProducts((prev) => {
+        if (!Array.isArray(prev) || !prev.length) return prev;
+        const next = prev.filter((p) => !isProductGone(p));
+        return next.length === prev.length ? prev : next;
+      });
+    }, 4000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [sec]);
+
 const visibleProducts = useMemo(() => {
   if (sec === "products" && prodImageSearch && Array.isArray(prodImageResults)) {
-    return prodImageResults;
+    return (prodImageResults || []).filter((p: any) => !isProductGone(p));
   }
-  const list = Array.isArray(products) ? products : [];
+  let list = Array.isArray(products) ? products : [];
+  // O'chirilgan / yashirilgan — hech qayerda ko'rinmasin
+  list = list.filter((p: any) => !isProductGone(p));
+
+  // Status filtri (client) — moderatsiyada faqat pending
+  if (sec === "products" && prodFilter) {
+    list = list.filter((p: any) => String(p?.status || "") === prodFilter);
+  }
+
   if (sec !== "products" || !normalizedProdSearch) return list;
 
   const tokens = normalizedProdSearch.split(/\s+/).filter(Boolean);
@@ -783,7 +875,7 @@ const visibleProducts = useMemo(() => {
     const blob = productSearchBlob(p);
     return tokens.every((t) => blob.includes(t));
   });
-}, [products, sec, normalizedProdSearch, prodImageSearch, prodImageResults]);
+}, [products, sec, prodFilter, normalizedProdSearch, prodImageSearch, prodImageResults]);
 
   const runAdminImageSearch = async () => {
     try {
@@ -1299,16 +1391,25 @@ const visibleProducts = useMemo(() => {
             {loadingSec === "products" || prodImageLoading ? (
               <SectionLoader label="Mahsulotlar yuklanmoqda..." />
             ) : visibleProducts.length === 0 ? (
-              <EmptyState
-                title={
-                  prodSearch.trim()
-                    ? "Qidiruv bo'yicha mahsulot topilmadi"
-                    : prodFilter === "pending"
-                    ? "Moderatsiyada mahsulot topilmadi"
-                    : "Mahsulot topilmadi"
-                }
-                subtitle="Filtrni o'zgartirib yoki keyinroq qayta tekshirib ko'ring."
-              />
+              prodFilter === "pending" && !prodSearch.trim() && !prodImageSearch ? (
+                <View style={{ paddingVertical: 48, alignItems: "center" }}>
+                  <Ionicons name="checkmark-circle-outline" size={48} color={C.muted} />
+                  <Text style={{ marginTop: 12, color: C.muted, fontWeight: "700", fontSize: 15 }}>
+                    Moderatsiyada mahsulot yo'q
+                  </Text>
+                </View>
+              ) : (
+                <EmptyState
+                  title={
+                    prodSearch.trim()
+                      ? "Qidiruv bo'yicha mahsulot topilmadi"
+                      : prodFilter === "pending"
+                      ? "Moderatsiyada mahsulot yo'q"
+                      : "Mahsulot topilmadi"
+                  }
+                  subtitle="Filtrni o'zgartirib yoki keyinroq qayta tekshirib ko'ring."
+                />
+              )
             ) : visibleProducts.map((p) => (
               <View key={p.id} style={st.card}>
                 <View style={{ flexDirection: "row", gap: 12, marginBottom: 8 }}>

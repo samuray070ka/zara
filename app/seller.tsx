@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -19,7 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { LinearGradient } from "expo-linear-gradient";
 import { C, S, R, fmt } from "@/src/lib/theme";
 import { useLang, ml } from "@/src/lib/i18n";
-import { api, fetchProductsSafe } from "@/src/lib/api";
+import { api } from "@/src/lib/api";
 import { storage } from "@/src/utils/storage";
 import { useAuth } from "@/src/lib/auth";
 import { getCurrentLocation } from "@/src/lib/geo";
@@ -128,31 +128,11 @@ async function saveLastSellerCategory(categoryId: string) {
   } catch {}
 }
 
-/** Server javobi massiv yoki {items|products|results|data} bo'lishi mumkin */
-function toList(r: any): any[] {
-  if (Array.isArray(r)) return r;
-  if (!r || typeof r !== "object") return [];
-  for (const k of ["items", "products", "results", "data", "rows"]) {
-    const v = r[k];
-    if (Array.isArray(v)) return v;
-    if (v && typeof v === "object" && Array.isArray(v.items)) return v.items;
-  }
-  return [];
-}
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Sotuvchi mahsulotlari: qayta urinish + ochiq ro'yxat + diagnostika */
-/** Sotuvchi mahsulotlari: qayta urinish + ochiq ro'yxat + diagnostika */
-async function loadAllSellerProducts(
-  sellerId?: string | null,
-  onPartial?: (list: any[]) => void,
-  onDiag?: (text: string) => void
-): Promise<any[]> {
+/** Sotuvchi mahsulotlari 100+ — backend limitsiz front yechim */
+async function loadAllSellerProducts(sellerId?: string | null): Promise<any[]> {
   const seen = new Set<string>();
   const out: any[] = [];
-  let lastErr: any = null;
-  const stat: Record<string, string> = {};
   const push = (list: any[]) => {
     for (const p of list || []) {
       const id = String(p?.id || "");
@@ -161,120 +141,52 @@ async function loadAllSellerProducts(
       out.push(p);
     }
   };
-  const emit = () => {
-    if (out.length) onPartial?.([...out]);
-    onDiag?.(Object.entries(stat).map(([k, v]) => `${k}: ${v}`).join(" • "));
-  };
 
-  const PAGE = 30;
-  // 1) birinchi sahifa — xato kelsa 3 martagacha qayta uriniladi
-  let mainCount = 0;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  // 1) asosiy endpoint (odatda 100 ta)
+  try {
+    const main = await api("/seller/products");
+    push(Array.isArray(main) ? main : []);
+  } catch {}
+
+  // 2) skip/limit so'rov (agar server qabul qilsa — qo'shimcha sahifalar)
+  for (let skip = 100; skip < 2000; skip += 100) {
     try {
-      const main = toList(await api(`/seller/products?skip=0&limit=${PAGE}`));
-      mainCount = main.length;
-      stat["seller/products"] = `${mainCount} ta` + (attempt > 1 ? ` (${attempt}-urinish)` : "");
-      if (mainCount > 0) {
-        push(main);
-        emit();
-        break;
-      }
-      // bo'sh javob bo'lsa qayta urinishning ma'nosi yo'q — to'g'ridan-to'g'ri ochiq ro'yxatga o'tamiz
-      if (__DEV__ && mainCount === 0) {
-        console.log("[Seller] /seller/products bo'sh qaytardi (xato yo'q) — ochiq fallback ishga tushadi");
-      }
+      const chunk = await api(`/seller/products?skip=${skip}&limit=100`);
+      const list = Array.isArray(chunk) ? chunk : [];
+      if (!list.length) break;
+      const before = out.length;
+      push(list);
+      if (out.length === before || list.length < 100) break;
+    } catch {
       break;
-    } catch (e: any) {
-      lastErr = e;
-      stat["seller/products"] = `xato (${e?.message || "?"})`;
     }
-    if (attempt < 3) await sleep(600 * attempt);
   }
-  emit();
 
-  // 2) keyingi sahifalar (30 tadan)
-  if (mainCount >= PAGE) {
-    for (let skip = PAGE; skip < 3000; skip += PAGE) {
+  // 3) ochiq /products?seller_id= — tasdiqlanganlar, skip bilan
+  if (sellerId) {
+    for (let skip = 0; skip < 2000; skip += 50) {
       try {
-        const list = toList(await api(`/seller/products?skip=${skip}&limit=${PAGE}`));
+        const r = await api(
+          `/products?seller_id=${encodeURIComponent(sellerId)}&sort=new&limit=50&skip=${skip}`
+        );
+        const list = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
         if (!list.length) break;
-        const before = out.length;
         push(list);
-        emit();
-        if (out.length === before || list.length < PAGE) break;
+        if (list.length < 50) break;
       } catch {
         break;
       }
     }
   }
 
-  // 3) ochiq ro'yxat — asosiy endpoint bo'sh javob qaytarsa HAM ishga tushadi
-  if (sellerId && mainCount === 0) {
-    let pubCount = 0;
-    for (let skip = 0; skip < 2000; skip += 50) {
-      try {
-        const r = await api(
-          `/products?seller_id=${encodeURIComponent(sellerId)}&sort=new&limit=50&skip=${skip}`
-        );
-        const list = toList(r);
-        if (!list.length) break;
-        pubCount += list.length;
-        push(list);
-        emit();
-        if (list.length < 50) break;
-      } catch (e: any) {
-        if (!out.length) lastErr = e;
-        stat["ochiq ro'yxat"] = `xato (${e?.message || "?"})`;
-        break;
-      }
-    }
-    if (!stat["ochiq ro'yxat"]) stat["ochiq ro'yxat"] = `${pubCount} ta`;
-  }
-
-  // 3b) oxirgi tayanich: home sahifada ishlayotgan ochiq feed'dan
-  // client tomonda seller_id bo'yicha saralab olamiz (String() bilan taqqoslaymiz)
-  if (sellerId && out.length === 0) {
-    let scanned = 0;
-    for (let skip = 0; skip < 1000; skip += 50) {
-      try {
-        const r: any = await fetchProductsSafe({ sort: "new", limit: 50, skip });
-        const list = toList(r);
-        if (!list.length) break;
-        scanned += list.length;
-        const mine = list.filter((p: any) => {
-          const ids = [p?.seller_id, p?.seller?.id, p?.store_id, p?.owner_id];
-          return ids.some((x) => x != null && String(x) === String(sellerId));
-        });
-        push(mine);
-        emit();
-        if (list.length < 50) break;
-      } catch (e: any) {
-        stat["ochiq feed"] = `xato (${e?.message || "?"})`;
-        break;
-      }
-    }
-    stat["ochiq feed filtri"] = out.length
-      ? `${out.length} ta (${scanned} ta tekshirildi)`
-      : `${scanned} ta tekshirildi, seller_id mos kelmadi`;
-    if (__DEV__) {
-      console.log(`[Seller] fallback 3b: ${stat["ochiq feed filtri"]}, sellerId=${sellerId}`);
-    }
-  }
-
-  // 4) lokal kesh (vaqtinchalik local-/tmp- yozuvlar o'tkazib yuboriladi)
+  // 4) lokal kesh (qo'shilgan/tahrirlangan mahsulotlar saqlanadi)
   try {
     const key = `seller_products_extra_${sellerId || "me"}`;
     const raw = await storage.getItem(key, "[]");
     const cached = JSON.parse((raw as string) || "[]");
-    if (Array.isArray(cached)) {
-      const real = cached.filter((x: any) => !/^(local|tmp)-/.test(String(x?.id || "")));
-      push(real);
-      stat["kesh"] = `${real.length} ta`;
-    }
+    if (Array.isArray(cached)) push(cached);
   } catch {}
 
-  emit();
-  if (!out.length && lastErr) throw lastErr;
   return out;
 }
 
@@ -357,9 +269,6 @@ export default function Seller() {
   /** orderId -> { itemIndex: "accept" | "reject" } */
   const [itemDecisions, setItemDecisions] = useState<Record<string, Record<number, "accept" | "reject"> >>({});
 
-  const loadReqRef = useRef(0);
-  const [prodDiag, setProdDiag] = useState("");
-
   const getShopLocation = async () => {
     setMsg("");
     setShopLocLoading(true);
@@ -375,37 +284,22 @@ export default function Seller() {
   };
 
   const load = useCallback(async () => {
-    const rid = ++loadReqRef.current;
-    const fresh = () => loadReqRef.current === rid;
     setLoading(true);
     try {
       await Promise.all([
-        api("/seller/stats").then((s) => fresh() && s && setStats(s)).catch(() => {}),
-        loadAllSellerProducts(
-          user?.id,
-          (partial) => {
-            if (fresh()) setProducts(partial);
-          },
-          (d) => {
-            if (fresh()) setProdDiag(d);
-          }
-        )
-          .then((pr) => {
-            if (fresh()) setProducts(Array.isArray(pr) ? pr : []);
-          })
-          .catch((e: any) => {
-            // eski ro'yxat o'chirilmaydi, sababi esa ekranda ko'rinadi
-            if (fresh()) setMsg(`Mahsulotlarni yuklab bo'lmadi: ${e?.message || "server javob bermadi"}`);
-          }),
+        api("/seller/stats").then((st) => st && setStats(st)).catch(() => {}),
+        loadAllSellerProducts(user?.id)
+          .then((pr) => setProducts(Array.isArray(pr) ? pr : []))
+          .catch(() => setProducts([])),
         api("/seller/orders")
-          .then((ord) => fresh() && setOrders(toList(ord)))
-          .catch(() => fresh() && setOrders([])),
+          .then((ord) => setOrders(Array.isArray(ord) ? ord : []))
+          .catch(() => setOrders([])),
         api("/categories")
-          .then((ct) => fresh() && setCats(toList(ct)))
+          .then((ct) => setCats(Array.isArray(ct) ? ct : []))
           .catch(() => {}),
       ]);
     } finally {
-      if (fresh()) setLoading(false);
+      setLoading(false);
     }
   }, [user?.id]);
 
@@ -727,21 +621,61 @@ export default function Seller() {
     setMsg("");
   };
 
+  const markProductDeletedLocal = async (pid: string) => {
+    const key = "zarram_deleted_product_ids";
+    let arr: string[] = [];
+    try {
+      const rawLs = globalThis?.localStorage?.getItem?.(key);
+      if (rawLs) arr = JSON.parse(rawLs);
+    } catch {}
+    try {
+      const rawSt = await storage.getItem(key, "[]");
+      const fromSt = JSON.parse((rawSt as string) || "[]");
+      if (Array.isArray(fromSt)) arr = [...arr, ...fromSt.map(String)];
+    } catch {}
+    const id = String(pid);
+    if (!arr.includes(id)) arr.push(id);
+    // unique, last 500
+    const uniq = Array.from(new Set(arr.map(String))).slice(-500);
+    try {
+      globalThis?.localStorage?.setItem?.(key, JSON.stringify(uniq));
+    } catch {}
+    try {
+      await storage.setItem(key, JSON.stringify(uniq));
+    } catch {}
+  };
+
   const confirmDelete = async () => {
     if (!deleteTarget) return;
-    const pid = deleteTarget.id;
+    const pid = String(deleteTarget.id);
     setProductBusy(`${pid}:delete`);
     setDeleteModal(false);
     try {
-      // POST va DELETE — qaysi ishlasa
+      // 0) DARHOL local belgilash — admin moderatsiyada ko'rinmasin
+      await markProductDeletedLocal(pid);
+
+      // 1) Yashirish
       try {
-        await api(`/seller/products/${pid}/delete`, { method: "POST" });
-      } catch {
-        await api(`/seller/products/${pid}`, { method: "DELETE" });
+        await api(`/seller/products/${pid}/toggle-hide`, { method: "POST" });
+      } catch {}
+
+      // 2) O'chirish (bir necha usul)
+      let deleted = false;
+      for (const call of [
+        () => api(`/seller/products/${pid}/delete`, { method: "POST" }),
+        () => api(`/seller/products/${pid}`, { method: "DELETE" }),
+        () => api(`/seller/products/${pid}/delete`, { method: "DELETE" }),
+      ]) {
+        try {
+          await call();
+          deleted = true;
+          break;
+        } catch {}
       }
+
       await uncacheSellerProduct(user?.id, pid);
-      setProducts((prev) => (prev || []).filter((x) => x.id !== pid));
-      setMsg("Mahsulot o‘chirildi ✓");
+      setProducts((prev) => (prev || []).filter((x) => String(x.id) !== pid));
+      setMsg(deleted ? "Mahsulot o‘chirildi ✓" : "Mahsulot yashirildi / o‘chirildi ✓");
       setDeleteTarget(null);
     } catch (e: any) {
       setMsg(e?.message || "O‘chirishda xatolik");
@@ -1459,13 +1393,7 @@ export default function Seller() {
               </View>
             )}
             {!loading && products.length === 0 && (
-              <View style={{ alignItems: "center", gap: 8 }}>
-                <Text style={st.empty}>Mahsulot yo'q. Yuqoridan qo'shing.</Text>
-                {!!prodDiag && <Text style={st.empty}>{prodDiag}</Text>}
-                <Pressable style={[st.miniBtn, { backgroundColor: C.brandDark }]} onPress={load}>
-                  <Text style={st.miniBtnTxt}>Qayta yuklash</Text>
-                </Pressable>
-              </View>
+              <Text style={st.empty}>Mahsulot yo'q. Yuqoridan qo'shing.</Text>
             )}
 
             {products.length > 0 && (
