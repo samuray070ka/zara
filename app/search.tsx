@@ -9,7 +9,6 @@ import {
   ScrollView,
   ActivityIndicator,
   useWindowDimensions,
-  Platform,
   Modal,
 } from "react-native";
 import { Image } from "expo-image";
@@ -25,9 +24,6 @@ import { searchByImageSections, pickerAssetToUri } from "@/src/lib/imageSearch";
 import ExactMatchCard from "@/src/lib/ExactMatchCard";
 import ProductCard from "@/src/components/ProductCard";
 
-
-/** Solishtirish uchun matnni yagona ko'rinishga keltirish:
- *  kichik harf, apostrof turlari (ʻ ' ` ‘ ’) bittaga, kirill → lotin */
 const CYR_MAP: Record<string, string> = {
   а: "a", б: "b", в: "v", г: "g", ғ: "g'", д: "d", е: "e", ё: "yo", ж: "j",
   з: "z", и: "i", й: "y", к: "k", қ: "q", л: "l", м: "m", н: "n", о: "o",
@@ -41,25 +37,31 @@ function normText(s: any): string {
   t = t.replace(/[ʻʼʽ‘’´`']/g, "'");
   let out = "";
   for (const ch of t) out += CYR_MAP[ch] ?? ch;
-  // apostroflarsiz solishtiramiz: "to'quv" = "toʻquv" = "тўқув" = "toquv"
   return out.split("'").join("").replace(/\s+/g, " ").trim();
 }
 
 function productTextBlob(p: any): string {
   const parts: string[] = [];
-  const n = p?.name;
-  if (typeof n === "string") parts.push(n);
-  else if (n && typeof n === "object") {
-    parts.push(n.uz || "", n.ru || "", n.en || "");
-  }
-  const d = p?.desc;
-  if (typeof d === "string") parts.push(d);
-  else if (d && typeof d === "object") {
-    parts.push(d.uz || "", d.ru || "", d.en || "");
-  }
-  if (p?.brand) parts.push(String(p.brand));
-  if (p?.search_text) parts.push(String(p.search_text));
+  const push = (v: any) => {
+    if (v == null) return;
+    if (typeof v === "string") parts.push(v);
+    else if (typeof v === "object") {
+      parts.push(v.uz || "", v.ru || "", v.en || "", v.name || "");
+    } else parts.push(String(v));
+  };
+  push(p?.name);
+  push(p?.title);
+  push(p?.desc);
+  push(p?.description);
+  push(p?.brand);
+  push(p?.search_text);
+  push(p?.sku);
+  push(p?.barcode);
   if (Array.isArray(p?.tags)) parts.push(p.tags.join(" "));
+  if (Array.isArray(p?.keywords)) parts.push(p.keywords.join(" "));
+  // kategoriya
+  push(p?.category_name);
+  push(p?.category?.name);
   return normText(parts.join(" "));
 }
 
@@ -67,34 +69,94 @@ function productMatchesQuery(p: any, query: string): boolean {
   const q = normText(query);
   if (!q) return true;
   const blob = productTextBlob(p);
+  if (!blob) return false;
+  // To'liq ibora
+  if (blob.includes(q)) return true;
+  // Har bir so'z
   const tokens = q.split(/\s+/).filter(Boolean);
-  // barcha so'zlar matnda bo'lishi kerak
-  return tokens.every((t) => blob.includes(t));
+  if (tokens.length > 1) return tokens.every((t) => blob.includes(t));
+  // Bitta so'z — qisman moslik (kamida 3 belgi)
+  if (q.length >= 3) return blob.includes(q);
+  return false;
 }
 
-/** To'liq katalog — fallback uchun sahifa-sahifa (bu yerda filtr qo'llanmaydi) */
-async function fetchAllCatalog(): Promise<any[]> {
-  // Barcha mos mahsulotlar — skip bilan sahifa-sahifa
-  const seen = new Set<string>();
-  const all: any[] = [];
-  const pageSize = 50;
-  for (let skip = 0; skip < 2000; skip += pageSize) {
-    const r = await api(
-      `/products?sort=mix&limit=${pageSize}&skip=${skip}`
-    ).catch(() => ({ items: [] }));
-    const items = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
-    if (!items.length) break;
-    const before = all.length;
-    for (const it of items) {
-      if (!it?.id || seen.has(it.id)) continue;
-      seen.add(it.id);
-      all.push(it);
-    }
-    if (all.length === before || items.length < pageSize) break;
+function unwrapItems(r: any): any[] {
+  if (Array.isArray(r?.items)) return r.items;
+  if (Array.isArray(r?.products)) return r.products;
+  if (Array.isArray(r)) return r;
+  return [];
+}
+
+/** Global katalog keshi */
+const _catalogMem: { items: any[]; at: number; loading?: Promise<any[]> } = {
+  items: [],
+  at: 0,
+};
+
+async function loadPage(skip: number, limit = 15): Promise<any[]> {
+  try {
+    const r = await api(`/products?sort=new&limit=${limit}&skip=${skip}`);
+    return unwrapItems(r);
+  } catch {
+    return [];
   }
-  return all;
 }
 
+async function ensureCatalog(
+  onBatch?: (all: any[]) => void,
+  maxItems = 600
+): Promise<any[]> {
+  // Yangi kesh (3 daqiqa, kamida 20 ta)
+  if (_catalogMem.items.length >= 20 && Date.now() - _catalogMem.at < 180_000) {
+    onBatch?.(_catalogMem.items);
+    return _catalogMem.items;
+  }
+
+  if (_catalogMem.loading) {
+    const items = await _catalogMem.loading;
+    onBatch?.(items);
+    return items;
+  }
+
+  const run = (async () => {
+    const seen = new Set<string>();
+    const all: any[] = [];
+    const pageSize = 15;
+
+    // Parallel: 2 sahifa birga — tezroq
+    for (let page = 0; page < 40 && all.length < maxItems; page += 2) {
+      const skipA = page * pageSize;
+      const skipB = (page + 1) * pageSize;
+      const [a, b] = await Promise.all([
+        loadPage(skipA, pageSize),
+        loadPage(skipB, pageSize),
+      ]);
+      let added = 0;
+      for (const chunk of [a, b]) {
+        for (const it of chunk) {
+          const id = String(it?.id || "");
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          all.push(it);
+          added++;
+        }
+      }
+      _catalogMem.items = [...all];
+      _catalogMem.at = Date.now();
+      onBatch?.(all);
+      if (added === 0) break;
+      if (a.length < pageSize) break;
+    }
+    return all;
+  })();
+
+  _catalogMem.loading = run;
+  try {
+    return await run;
+  } finally {
+    _catalogMem.loading = undefined;
+  }
+}
 
 export default function Search() {
   const router = useRouter();
@@ -110,6 +172,7 @@ export default function Search() {
   const [minP, setMinP] = useState("");
   const [maxP, setMaxP] = useState("");
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [searched, setSearched] = useState(false);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [showImageSource, setShowImageSource] = useState(false);
@@ -117,10 +180,7 @@ export default function Search() {
   const [imageError, setImageError] = useState("");
   const debounce = useRef<any>(null);
   const autoImageStarted = useRef(false);
-  // Eskirgan qidiruv javoblari natijani yozib qo'ymasligi uchun ketma-ketlik raqami
   const searchReqRef = useRef(0);
-  // To'liq katalog keshi — har yozishda qayta yuklanmasligi uchun
-  const catalogRef = useRef<{ at: number; items: any[] } | null>(null);
 
   const cols = Math.min(6, Math.max(2, Math.floor(width / 220)));
   const cardW = (Math.min(width, 1200) - S.lg * 2 - S.md * (cols - 1)) / cols;
@@ -134,102 +194,136 @@ export default function Search() {
     api("/search/suggest?q=")
       .then((r) => setSuggestions(r.suggestions || []))
       .catch(() => {});
+    ensureCatalog().catch(() => {});
   }, []);
+
+  const applyPrice = (items: any[]) => {
+    let out = items;
+    if (minP) {
+      const mn = Number(minP);
+      if (!Number.isNaN(mn)) out = out.filter((p) => Number(p.price ?? p.display_price ?? 0) >= mn);
+    }
+    if (maxP) {
+      const mx = Number(maxP);
+      if (!Number.isNaN(mx)) out = out.filter((p) => Number(p.price ?? p.display_price ?? 0) <= mx);
+    }
+    return out;
+  };
 
   const doSearch = async (term?: string, opts?: { silentHist?: boolean }) => {
     const query = String(term ?? q ?? "").trim();
-    if (!query) return;
+    if (query.length < 3) return;
+
     const rid = ++searchReqRef.current;
     const fresh = () => searchReqRef.current === rid;
+
     setImageUri(null);
     setImageError("");
     setLoading(true);
+    setLoadingMore(false);
     setSearched(true);
     setExactResults([]);
+    setResults([]);
     if (term != null) setQ(String(term));
     if (!opts?.silentHist) {
       const newHist = [query, ...history.filter((h) => h !== query)].slice(0, 8);
       setHistory(newHist);
       storage.setItem("search_history", JSON.stringify(newHist)).catch(() => {});
     }
+
+    let firstShown = false;
+    const seenIds = new Set<string>();
+
+    const show = (list: any[]) => {
+      if (!fresh()) return;
+      const matched = applyPrice(list);
+      // dedupe
+      const uniq: any[] = [];
+      for (const p of matched) {
+        const id = String(p?.id || "");
+        if (!id || seenIds.has(id)) continue;
+        seenIds.add(id);
+        uniq.push(p);
+      }
+      if (uniq.length === 0 && !firstShown) return;
+      // merge with previous results
+      setResults((prev) => {
+        const map = new Map<string, any>();
+        for (const p of prev) map.set(String(p.id), p);
+        for (const p of uniq) map.set(String(p.id), p);
+        return Array.from(map.values());
+      });
+      if (!firstShown && uniq.length > 0) {
+        setLoading(false);
+        firstShown = true;
+      } else if (firstShown) {
+        setLoadingMore(true);
+      }
+    };
+
     try {
-      // 1) API search (barcha sahifalar) — yangi qidiruv boshlansa darhol to'xtaydi
-      const apiItems: any[] = [];
-      const apiSeen = new Set<string>();
-      for (let skip = 0; skip < 2000; skip += 50) {
+      // 1) Server search — sort=mix (oldingi ishlagan usul)
+      for (const sort of ["mix", "new"] as const) {
         if (!fresh()) return;
-        let url = `/products?search=${encodeURIComponent(query)}&sort=mix&limit=50&skip=${skip}`;
-        if (minP) url += `&min_price=${encodeURIComponent(minP)}`;
-        if (maxP) url += `&max_price=${encodeURIComponent(maxP)}`;
         try {
-          const r = await api(url);
-          const chunk = Array.isArray(r?.items) ? r.items : Array.isArray(r) ? r : [];
-          if (!chunk.length) break;
-          let added = 0;
-          for (const it of chunk) {
-            if (!it?.id || apiSeen.has(it.id)) continue;
-            apiSeen.add(it.id);
-            apiItems.push(it);
-            added++;
+          const r = await api(
+            `/products?search=${encodeURIComponent(query)}&sort=${sort}&limit=15&skip=0`
+          );
+          const items = unwrapItems(r);
+          if (items.length) {
+            // Server topganini ko'rsatamiz (client filtr ixtiyoriy)
+            const filtered = items.filter((p) => productMatchesQuery(p, query));
+            show(filtered.length ? filtered : items);
+            // yana 1 sahifa
+            try {
+              const r2 = await api(
+                `/products?search=${encodeURIComponent(query)}&sort=${sort}&limit=15&skip=15`
+              );
+              const more = unwrapItems(r2);
+              if (more.length) {
+                const f2 = more.filter((p) => productMatchesQuery(p, query));
+                show(f2.length ? f2 : more);
+              }
+            } catch {}
+            // Server ishladi — client katalog shart emas, lekin qo'shimcha uchun davom
+            break;
           }
-          if (!added || chunk.length < 50) break;
         } catch {
-          break;
+          // 500 — keyingi usul
         }
       }
-      if (!fresh()) return;
 
-      let items: any[] = [];
-      // 2) API natijalarini client tomonda ham aniq saralaymiz
-      const filteredApi = apiItems.filter((p) => productMatchesQuery(p, query));
-      if (filteredApi.length) items = filteredApi;
-      else if (apiItems.length) items = apiItems; // server topganini client filtri o'chirib yubormasin
-
-      if (items.length) {
-        // narx filtri — server qo'llamagan bo'lishi mumkin, client tomonda ham qo'llaymiz
-        if (minP) {
-          const mn = Number(minP);
-          if (!Number.isNaN(mn)) items = items.filter((p) => Number(p.price ?? p.display_price ?? 0) >= mn);
-        }
-        if (maxP) {
-          const mx = Number(maxP);
-          if (!Number.isNaN(mx)) items = items.filter((p) => Number(p.price ?? p.display_price ?? 0) <= mx);
-        }
-      } else {
-        // 3) Fallback: API hech narsa bermasa — to'liq katalog (60s kesh) client filtrdan o'tadi
-        let catalog: any[] | null = null;
-        if (catalogRef.current && Date.now() - catalogRef.current.at < 60_000) {
-          catalog = catalogRef.current.items;
-        } else {
-          const fetched = await fetchAllCatalog();
-          if (!fresh()) return;
-          catalogRef.current = { at: Date.now(), items: fetched };
-          catalog = fetched;
-        }
-        let local = catalog.filter((p) => productMatchesQuery(p, query));
-        if (minP) {
-          const mn = Number(minP);
-          if (!Number.isNaN(mn)) local = local.filter((p) => Number(p.price ?? p.display_price ?? 0) >= mn);
-        }
-        if (maxP) {
-          const mx = Number(maxP);
-          if (!Number.isNaN(mx)) local = local.filter((p) => Number(p.price ?? p.display_price ?? 0) <= mx);
-        }
-        items = local;
+      // 2) Client katalog filtr (search= ishlamasa yoki kam natija)
+      if (_catalogMem.items.length > 0) {
+        show(_catalogMem.items.filter((p) => productMatchesQuery(p, query)));
       }
+
+      await ensureCatalog((all) => {
+        show(all.filter((p) => productMatchesQuery(p, query)));
+      }, 600);
+
       if (!fresh()) return;
-      setResults(items);
+      // Yakuniy
+      const finalList = applyPrice(
+        (_catalogMem.items || []).filter((p) => productMatchesQuery(p, query))
+      );
+      if (finalList.length) {
+        setResults(finalList);
+      } else if (!firstShown) {
+        setResults([]);
+      }
     } catch (e) {
       if (!fresh()) return;
-      console.warn("text search failed", e);
-      setResults([]);
-      setExactResults([]);
+      console.warn("search failed", e);
+      if (!firstShown) setResults([]);
     } finally {
-      if (fresh()) setLoading(false);
+      if (fresh()) {
+        setLoading(false);
+        setLoadingMore(false);
+      }
     }
   };
 
-  // Takliflar + matn yozganda avtomatik qidiruv (rasm rejimiga tegilmaydi)
   useEffect(() => {
     if (debounce.current) clearTimeout(debounce.current);
     const term = q.trim();
@@ -242,15 +336,20 @@ export default function Search() {
       }
       return;
     }
-    if (imageUri) return; // rasm qidiruvi aktiv — matn avto-qidiruv ishlamasin
+    if (imageUri) return;
+
     debounce.current = setTimeout(() => {
       api(`/search/suggest?q=${encodeURIComponent(term)}`)
         .then((r) => setSuggestions(r.suggestions || []))
         .catch(() => {});
-      if (term.length >= 2) {
+      if (term.length >= 3) {
         doSearch(term, { silentHist: true });
+      } else {
+        setSearched(false);
+        setResults([]);
+        setLoading(false);
       }
-    }, 350);
+    }, 280);
     return () => {
       if (debounce.current) clearTimeout(debounce.current);
     };
@@ -267,7 +366,6 @@ export default function Search() {
     setSearched(true);
     setResults([]);
     setExactResults([]);
-    setExactResults([]);
     try {
       const { exact, similar } = await searchByImageSections(uri);
       setExactResults(Array.isArray(exact) ? exact : []);
@@ -277,7 +375,7 @@ export default function Search() {
       }
     } catch (e: any) {
       const msg = String(e?.message || e || "");
-      if (/404|not found|not found/i.test(msg) || msg.includes("Not Found")) {
+      if (/404|not found/i.test(msg) || msg.includes("Not Found")) {
         setImageError(
           "Rasm orqali qidiruv backendda hali yoqilmagan. Keyinroq qayta urinib ko'ring."
         );
@@ -285,7 +383,7 @@ export default function Search() {
         setImageError(msg || "Rasm orqali qidirishda xatolik");
       }
       setResults([]);
-    setExactResults([]);
+      setExactResults([]);
     } finally {
       setImageSearching(false);
       setLoading(false);
@@ -299,7 +397,6 @@ export default function Search() {
 
   const pickSearchImage = async () => {
     setShowImageSource(false);
-
     try {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
@@ -326,7 +423,6 @@ export default function Search() {
 
   const takeSearchPhoto = async () => {
     setShowImageSource(false);
-
     try {
       const perm = await ImagePicker.requestCameraPermissionsAsync();
       if (!perm.granted) {
@@ -349,7 +445,6 @@ export default function Search() {
     }
   };
 
-  // Home dan imageMode bilan kelganda darhol picker ochish
   useEffect(() => {
     if (params.imageMode === "1" && !autoImageStarted.current) {
       autoImageStarted.current = true;
@@ -387,13 +482,15 @@ export default function Search() {
             autoFocus={params.imageMode !== "1"}
             returnKeyType="search"
             blurOnSubmit
-            onSubmitEditing={() => doSearch()}
+            onSubmitEditing={() => {
+              if (q.trim().length >= 3) doSearch();
+            }}
           />
           {!!q && (
             <Pressable
               testID="search-clear-button"
               onPress={() => {
-                searchReqRef.current++; // davom etayotgan qidiruvni bekor qilamiz
+                searchReqRef.current++;
                 setQ("");
                 setSearched(false);
                 setResults([]);
@@ -407,7 +504,9 @@ export default function Search() {
           )}
           <Pressable
             testID="search-submit-button"
-            onPress={() => doSearch()}
+            onPress={() => {
+              if (q.trim().length >= 3) doSearch();
+            }}
             style={{ paddingHorizontal: 6, paddingVertical: 4 }}
             hitSlop={8}
           >
@@ -475,18 +574,26 @@ export default function Search() {
               placeholderTextColor={C.muted}
               keyboardType="numeric"
             />
-            <Pressable testID="search-apply-price" style={st.applyBtn} onPress={() => doSearch()}>
+            <Pressable
+              testID="search-apply-price"
+              style={st.applyBtn}
+              onPress={() => {
+                if (q.trim().length >= 3) doSearch();
+              }}
+            >
               <Text style={{ color: "#fff", fontWeight: "800", fontSize: 12 }}>{t("apply")}</Text>
             </Pressable>
           </View>
         </>
       )}
 
-      {loading ? (
+      {loading && results.length === 0 ? (
         <View style={st.loadingWrap}>
           <ActivityIndicator size="large" color={C.brand} />
-          {imageSearching && (
+          {imageSearching ? (
             <Text style={st.loadingHint}>{t("imageSearching")}</Text>
+          ) : (
+            <Text style={st.loadingHint}>Qidirilmoqda...</Text>
           )}
         </View>
       ) : searched ? (
@@ -566,6 +673,16 @@ export default function Search() {
               </View>
             ) : null
           }
+          ListFooterComponent={
+            loadingMore ? (
+              <View style={{ paddingVertical: 16, alignItems: "center", gap: 8 }}>
+                <ActivityIndicator color={C.brand} />
+                <Text style={{ color: C.muted, fontSize: 12 }}>Yana qidirilmoqda...</Text>
+              </View>
+            ) : (
+              <View style={{ height: S.xl }} />
+            )
+          }
           ListEmptyComponent={
             exactResults.length ? null : (
               <Text style={{ textAlign: "center", color: C.muted, marginTop: 60 }}>
@@ -579,11 +696,7 @@ export default function Search() {
           contentContainerStyle={{ padding: S.lg, maxWidth: 800, width: "100%", alignSelf: "center" }}
           keyboardShouldPersistTaps="handled"
         >
-          <Pressable
-            testID="search-image-cta"
-            style={st.imageCta}
-            onPress={openImageSource}
-          >
+          <Pressable testID="search-image-cta" style={st.imageCta} onPress={openImageSource}>
             <View style={st.imageCtaIcon}>
               <Ionicons name="images-outline" size={28} color={C.brandDark} />
             </View>
@@ -593,6 +706,12 @@ export default function Search() {
             </View>
             <Ionicons name="chevron-forward" size={20} color={C.muted} />
           </Pressable>
+
+          {q.trim().length > 0 && q.trim().length < 3 && (
+            <Text style={{ color: C.muted, fontSize: 13, marginBottom: S.md }}>
+              Qidirish uchun kamida 3 ta harf yozing...
+            </Text>
+          )}
 
           {suggestions.length > 0 && !!q && (
             <>
@@ -657,19 +776,11 @@ export default function Search() {
             <View style={st.sourceHandle} />
             <Text style={st.sourceTitle}>Rasm orqali qidirish</Text>
             <Text style={st.sourceSub}>Galereyadan tanlang yoki kamera bilan oling</Text>
-            <Pressable
-              testID="search-source-gallery"
-              style={st.sourceBtn}
-              onPress={pickSearchImage}
-            >
+            <Pressable testID="search-source-gallery" style={st.sourceBtn} onPress={pickSearchImage}>
               <Ionicons name="images-outline" size={22} color={C.brandDark} />
               <Text style={st.sourceBtnTxt}>Galereyadan tanlash</Text>
             </Pressable>
-            <Pressable
-              testID="search-source-camera"
-              style={st.sourceBtn}
-              onPress={takeSearchPhoto}
-            >
+            <Pressable testID="search-source-camera" style={st.sourceBtn} onPress={takeSearchPhoto}>
               <Ionicons name="camera-outline" size={22} color={C.brandDark} />
               <Text style={st.sourceBtnTxt}>Kamera bilan olish</Text>
             </Pressable>
@@ -682,7 +793,6 @@ export default function Search() {
           </View>
         </View>
       </Modal>
-
     </View>
   );
 }
@@ -717,18 +827,8 @@ const st = StyleSheet.create({
     backgroundColor: "#D1D5DB",
     marginBottom: 8,
   },
-  sourceTitle: {
-    fontSize: 17,
-    fontWeight: "900",
-    color: "#0F172A",
-    textAlign: "center",
-  },
-  sourceSub: {
-    fontSize: 13,
-    color: "#64748B",
-    textAlign: "center",
-    marginBottom: 4,
-  },
+  sourceTitle: { fontSize: 17, fontWeight: "900", color: "#0F172A", textAlign: "center" },
+  sourceSub: { fontSize: 13, color: "#64748B", textAlign: "center", marginBottom: 4 },
   sourceBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -740,15 +840,8 @@ const st = StyleSheet.create({
     borderWidth: 1,
     borderColor: "#A7F3D0",
   },
-  sourceBtnCancel: {
-    backgroundColor: "#F1F5F9",
-    borderColor: "#E2E8F0",
-  },
-  sourceBtnTxt: {
-    fontSize: 15,
-    fontWeight: "800",
-    color: "#065F46",
-  },
+  sourceBtnCancel: { backgroundColor: "#F1F5F9", borderColor: "#E2E8F0" },
+  sourceBtnTxt: { fontSize: 15, fontWeight: "800", color: "#065F46" },
   root: { flex: 1, backgroundColor: C.surface },
   header: {
     flexDirection: "row",
